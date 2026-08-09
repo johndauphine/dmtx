@@ -63,9 +63,63 @@ func newStage4DeleteReconciliationCapabilities(
 		return newMySQLDeleteReconciliationCapabilities(ctx, source, target, sourceTable, targetTable)
 	case source.Engine() == "mssql" && target.Engine() == "mssql":
 		return newSQLServerDeleteReconciliationCapabilities(ctx, source, target, sourceTable, targetTable)
+	case source.Engine() == "mssql" && target.Engine() == "postgres":
+		return newSQLServerToPostgresDeleteReconciliationCapabilities(ctx, source, target, sourceTable, targetTable)
 	default:
 		return postgresDeleteReconciliationCapabilities{}, fmt.Errorf("Stage 4 delete reconciliation route %s-to-%s has no certified source-key reader and target atomic receipt journal", source.Engine(), target.Engine())
 	}
+}
+
+// newSQLServerToPostgresDeleteReconciliationCapabilities composes the SQL
+// Server retained-key scanner with PostgreSQL's atomic delete receipt.  The
+// mixed canonicalizer is intentionally integer-only: a SQL Server collation
+// or representation must never be mistaken for PostgreSQL equality.
+func newSQLServerToPostgresDeleteReconciliationCapabilities(
+	ctx context.Context,
+	source sourceAdapter,
+	target targetAdapter,
+	sourceTable schema.Table,
+	targetTable schema.Table,
+) (postgresDeleteReconciliationCapabilities, error) {
+	sourceCapability, err := newSQLServerDeleteSourceCapability(ctx, source, sourceTable)
+	if err != nil {
+		return postgresDeleteReconciliationCapabilities{}, err
+	}
+	targetCapability, err := newPostgresDeleteTargetCapability(ctx, target, targetTable)
+	if err != nil {
+		return postgresDeleteReconciliationCapabilities{}, err
+	}
+	canonicalizer, err := newSQLServerToPostgresDeleteKeyCanonicalizer(
+		sourceTable, targetTable, sourceCapability.authority, targetCapability.authority,
+	)
+	if err != nil {
+		return postgresDeleteReconciliationCapabilities{}, err
+	}
+	return postgresDeleteReconciliationCapabilities{source: sourceCapability, target: targetCapability, canonicalizer: canonicalizer}, nil
+}
+
+// newPostgresDeleteTargetCapability performs only PostgreSQL target admission,
+// including its receipt journal. It is kept separate from the PostgreSQL
+// source constructor so cross-engine composition cannot inherit source facts.
+func newPostgresDeleteTargetCapability(ctx context.Context, target targetAdapter, table schema.Table) (*postgresDeleteTargetCapability, error) {
+	adapter, ok := target.(*postgresTargetAdapter)
+	if !ok || adapter == nil || adapter.database == nil {
+		return nil, fmt.Errorf("delete reconciliation requires a verified PostgreSQL target adapter")
+	}
+	if table.Schema != adapter.namespace || table.Schema == postgresDeleteJournalSchema {
+		return nil, fmt.Errorf("PostgreSQL delete target table is outside its configured namespace or is reserved private receipt state")
+	}
+	authority, err := inspectPostgresDeleteCatalogAuthority(ctx, adapter.database, adapter.namespace, table)
+	if err != nil {
+		return nil, fmt.Errorf("validate PostgreSQL delete target catalog: %w", err)
+	}
+	if !authority.CanDelete {
+		return nil, fmt.Errorf("PostgreSQL delete target requires exact table DELETE privilege")
+	}
+	if err := preflightPostgresDeleteReceiptJournal(ctx, adapter.database); err != nil {
+		return nil, fmt.Errorf("preflight PostgreSQL delete receipt journal: %w", err)
+	}
+	return &postgresDeleteTargetCapability{adapter: adapter, authority: authority}, nil
 }
 
 func newPostgresDeleteReconciliationCapabilities(

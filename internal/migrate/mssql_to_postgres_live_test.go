@@ -16,7 +16,144 @@ import (
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/engine"
 	"github.com/johndauphine/dmtx/internal/schema"
+	"github.com/johndauphine/dmtx/internal/state"
 )
+
+// TestStage4SQLServerToPostgresDeleteCompositionLiveTLS is the production
+// composed route sentinel. It intentionally treats a soft-delete marker as
+// ordinary source-present upsert data; only absent keys become hard-delete
+// candidates.
+func TestStage4SQLServerToPostgresDeleteCompositionLiveTLS(t *testing.T) {
+	mssqlDSN, mssqlCA, postgresDSN := os.Getenv("DMTX_TEST_MSSQL_DSN"), os.Getenv("DMTX_TEST_MSSQL_CA"), os.Getenv("DMTX_TEST_POSTGRES_DSN")
+	if mssqlDSN == "" || mssqlCA == "" || postgresDSN == "" {
+		t.Skip("set DMTX_TEST_MSSQL_DSN, DMTX_TEST_MSSQL_CA, and DMTX_TEST_POSTGRES_DSN to run the composed delete sentinel")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+	sourceEndpoint := sqlServerCommonFixtureEndpoint(t, mssqlDSN, mssqlCA)
+	pg, err := pgx.ParseConfig(postgresDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !postgresRouteLiveRequiresTLS(pg) {
+		t.Fatal("DMTX_TEST_POSTGRES_DSN must verify TLS")
+	}
+	caFile := stage4PostgresDeleteLiveCAFile(t, pg.ConnString())
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	table, namespace := "s4_mssql_delete_"+suffix, "dmtx_s4_mssql_delete_"+suffix
+	sourceDB, err := engine.OpenSQLServer2022Source(ctx, sourceEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cleanupCancel()
+		if _, err := sourceDB.ExecContext(cleanupCtx, "DROP TABLE IF EXISTS "+sqlServerQualified(sourceEndpoint.Schema, table)); err != nil {
+			t.Errorf("drop SQL Server delete source table: %v", err)
+		}
+		if err := sourceDB.Close(); err != nil {
+			t.Errorf("close SQL Server delete source: %v", err)
+		}
+	})
+	if _, err := sourceDB.ExecContext(ctx, "CREATE TABLE "+sqlServerQualified(sourceEndpoint.Schema, table)+" ([tenant_id] bigint NOT NULL, [item_id] int NOT NULL, [payload] nvarchar(64) NOT NULL, [is_deleted] bit NOT NULL, [deleted_at] datetime2(6) NULL, CONSTRAINT "+sqlServerIdentifier(table+"_pk")+" PRIMARY KEY ([tenant_id],[item_id]))"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sourceDB.ExecContext(ctx, "INSERT INTO "+sqlServerQualified(sourceEndpoint.Schema, table)+" VALUES (1,1,'active-before',0,NULL),(1,2,'soft-before',0,NULL),(9,9,'orphan-before',0,NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	targetEndpoint := config.Endpoint{Type: "postgres", Host: pg.Host, Port: int(pg.Port), Database: pg.Database, User: pg.User, Password: pg.Password, Schema: namespace, SSLMode: "verify-full", TLSCAFile: caFile}
+	targetDSN, err := engine.PostgresDSN(targetEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetDB, err := sql.Open("pgx", targetDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = targetDB.Close() })
+	if _, err := targetDB.ExecContext(ctx, "CREATE SCHEMA "+postgresIdentifier(namespace)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cleanupCancel()
+		if _, err := targetDB.ExecContext(cleanupCtx, "DROP SCHEMA IF EXISTS "+postgresIdentifier(namespace)+" CASCADE"); err != nil {
+			t.Errorf("drop PostgreSQL delete target schema: %v", err)
+		}
+	})
+	baselineCfg := config.Config{Source: sourceEndpoint, Target: targetEndpoint, Migration: config.Migration{TargetMode: "drop_recreate", IncludeTables: []string{table}}}
+	baseline, err := SQLServerToPostgresWithObserver(ctx, baselineCfg, nil)
+	if err != nil {
+		t.Fatalf("establish production SQL Server-to-PostgreSQL baseline: %v", err)
+	}
+	if baseline != (Result{Tables: 1, Rows: 3, Validated: true}) {
+		t.Fatalf("baseline result=%#v", baseline)
+	}
+	if _, err := sourceDB.ExecContext(ctx, "UPDATE "+sqlServerQualified(sourceEndpoint.Schema, table)+" SET [payload]='active-source' WHERE [tenant_id]=1 AND [item_id]=1; UPDATE "+sqlServerQualified(sourceEndpoint.Schema, table)+" SET [payload]='soft-source',[is_deleted]=1,[deleted_at]='2026-08-09T12:00:00.000000' WHERE [tenant_id]=1 AND [item_id]=2; DELETE FROM "+sqlServerQualified(sourceEndpoint.Schema, table)+" WHERE [tenant_id]=9 AND [item_id]=9"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Source: sourceEndpoint, Target: targetEndpoint, Migration: config.Migration{TargetMode: "upsert", IncludeTables: []string{table}, ConnectionLimit: 4, ReaderParallelism: 1, WriterParallelism: 1, MemoryCeilingBytes: 64 << 20, Validation: config.ValidationPolicy{Mode: config.ValidationCountOnly, FailOnMismatch: true}, Deletes: config.DeletePolicy{Mode: config.DeleteModeReconcile, TargetBehavior: config.DeleteTargetHard, Reconcile: config.DeleteReconcilePolicy{Schedule: config.DeleteScheduleInterval, Interval: time.Hour, BatchSize: 1, RequirePrimaryKey: true}}}}
+	backend := state.YAMLStore{Path: filepath.Join(t.TempDir(), "state.yaml")}
+	runID := "stage4-mssql-pg-delete-" + suffix
+	initializeStage4SQLServerStrictDeleteLifecycleRun(t, backend, runID, sourceEndpoint, targetEndpoint, time.Now().Add(-time.Minute))
+	events := []string{}
+	observer := stage4AdapterObserver{recordingTableObserver: recordingTableObserver{events: &events}, run: stage4LifecycleRunContext(t, backend, runID, false)}
+	result, err := SQLServerToPostgresWithObserver(ctx, cfg, observer)
+	if err != nil {
+		t.Fatalf("run composed SQL Server-to-PostgreSQL delete: %v", err)
+	}
+	if result != (Result{Tables: 1, Rows: 2, Validated: true}) {
+		t.Fatalf("result=%#v", result)
+	}
+	rows, err := targetDB.QueryContext(ctx, "SELECT tenant_id,item_id,payload,is_deleted,COALESCE(deleted_at::text,'') FROM "+postgresQualified(namespace, table)+" ORDER BY tenant_id,item_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var tenant int64
+		var item int
+		var payload string
+		var deleted bool
+		var at string
+		if err := rows.Scan(&tenant, &item, &payload, &deleted, &at); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%d/%d/%s/%t/%t", tenant, item, payload, deleted, at != ""))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1/1/active-source/false/false", "1/2/soft-source/true/true"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("target rows=%v want=%v", got, want)
+	}
+	record, found, err := backend.LoadLatestSuccessfulDeleteReconciliation(runID, state.TaskKey{Type: stage4AdapterNetworkTaskType, Schema: sourceEndpoint.Schema, Table: table})
+	if err != nil || !found || record.Candidates != 1 || record.DeletedRows != 1 {
+		t.Fatalf("delete record found=%t record=%#v err=%v", found, record, err)
+	}
+	if record.Plan == nil {
+		t.Fatal("delete reconciliation has no durable plan")
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if _, err := targetDB.ExecContext(cleanupCtx, "DELETE FROM "+postgresQualified(postgresDeleteJournalSchema, postgresDeleteJournalTable)+" WHERE plan_id = $1", record.Plan.PlanID); err != nil {
+			t.Errorf("remove PostgreSQL delete receipt: %v", err)
+		}
+	})
+	var receipts int
+	if err := targetDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+postgresQualified(postgresDeleteJournalSchema, postgresDeleteJournalTable)+" WHERE plan_id = $1", record.Plan.PlanID).Scan(&receipts); err != nil || receipts != 1 {
+		t.Fatalf("receipt journal receipts=%d err=%v", receipts, err)
+	}
+	// PostgreSQL creates and authenticates its receipt transactionally with the
+	// plan-scoped delete batch; unlike native-DDL targets it has no readiness
+	// receipt. The scoped target receipt above is the durable target evidence.
+	if _, found, err := backend.LoadStage4DeleteJournalReadiness(runID); err != nil || found {
+		t.Fatalf("PostgreSQL delete journal readiness found=%t err=%v", found, err)
+	}
+}
 
 func TestSQLServerToPostgresCommonFixtureLive(t *testing.T) {
 	sqlServerDSN := os.Getenv("DMTX_TEST_MSSQL_DSN")

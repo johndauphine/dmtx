@@ -588,8 +588,13 @@ and `TestStage4AdapterIncremental*` families. Same-engine delete receipts,
 replay, scheduling, and SQLite incremental-delete are covered by the
 `TestDeleteReconcile*`, `TestStage4*Delete*`, and
 `TestStage4SQLiteIncrementalDelete*` families. What remains is the armed
-source/target/process-kill matrix and every cross-engine delete cell, which is
-currently refused rather than claimed.
+source/target/process-kill matrix and every cross-engine delete cell other
+than SQL Server 2022-to-PostgreSQL 16 with exact ordered integer primary keys.
+That route composes SQL Server's retained source-key reader with PostgreSQL's
+atomic delete receipt and records a route-owned canonical-key proof. Text/
+collated, decimal, temporal, binary, and all other cross-engine key domains
+remain refused, as do date-window incremental-plus-delete and strict-
+consistency delete for this route.
 
 ## Acceptance 21.8 — Strict consistency
 
@@ -918,9 +923,13 @@ the deterministic tuning contract.
    relational/SQLite writer, catalog executor, deep probe, and strict route
    still needs its real type/collation/object/protocol matrix, including
    concurrency and commit-ack ambiguity.
-3. **Delete remains intentionally non-cross-engine.** Only the documented
-   same-engine cells and SQLite incremental-delete are admitted. Do not infer a
-   cross-engine delete contract from ordinary cross-engine upsert.
+3. **Delete is narrowly cross-engine.** SQL Server 2022-to-PostgreSQL 16 is
+   admitted only for exact ordered non-null integer primary keys. Every other
+   cross-engine delete cell remains refused; ordinary cross-engine upsert does
+   not imply delete authority. Soft-delete flags are ordinary upsert data and
+   never trigger physical absence-based deletion without a separate configured
+   product contract (column, active/deleted values or filter, timestamp rules,
+   and resurrection semantics).
 4. **Deferred strict cells must stay refused.** MySQL/MariaDB and SQLite
    migration scope, ClickHouse strict, unsupported target capability cells, and
    any missing native writer/validator have no safe fallback.

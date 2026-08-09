@@ -91,6 +91,11 @@ func prepareStage4AdapterPostgresDeleteComposition(
 	); err != nil {
 		return nil, err
 	}
+	if err := preflightStage4SQLServerToPostgresDeletePlanKeys(
+		source.Engine(), target.Engine(), prepared.plans,
+	); err != nil {
+		return nil, NewTransferError(ErrorClassPolicy, err)
+	}
 	if err := prepared.run.Validate(); err != nil {
 		return nil, NewTransferError(
 			ErrorClassState,
@@ -137,6 +142,30 @@ func prepareStage4AdapterPostgresDeleteComposition(
 		entries:       entries,
 		now:           func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+// preflightStage4SQLServerToPostgresDeletePlanKeys is deliberately structural:
+// it runs before schema evolution and therefore before target DDL can be
+// reached. Activation still re-reads both live catalogs and rebuilds this same
+// proof, so a plan preflight never substitutes for runtime authority.
+func preflightStage4SQLServerToPostgresDeletePlanKeys(sourceEngine, targetEngine string, plans []adapterTablePlan) error {
+	if sourceEngine != "mssql" || targetEngine != "postgres" {
+		return nil
+	}
+	for _, plan := range plans {
+		sourceKey, err := deletePrimaryKeyColumns(plan.source)
+		if err != nil {
+			return fmt.Errorf("SQL Server-to-PostgreSQL delete source table %s primary key: %w", plan.source.Name, err)
+		}
+		targetKey, err := deletePrimaryKeyColumns(plan.target)
+		if err != nil {
+			return fmt.Errorf("SQL Server-to-PostgreSQL delete target table %s primary key: %w", plan.target.Name, err)
+		}
+		if err := validateSQLServerToPostgresDeleteKeyPair(sourceKey, targetKey); err != nil {
+			return fmt.Errorf("SQL Server-to-PostgreSQL delete table %s key preflight: %w", plan.source.Name, err)
+		}
+	}
+	return nil
 }
 
 // activateStage4AdapterPostgresDeleteComposition binds every target table's
@@ -278,7 +307,8 @@ func requireStage4AdapterPostgresDeleteComposition(
 	if !(sourceEngine == "postgres" && targetEngine == "postgres") &&
 		!(sourceEngine == "sqlite" && targetEngine == "sqlite") &&
 		!(sourceEngine == "mysql" && targetEngine == "mysql") &&
-		!(sourceEngine == "mssql" && targetEngine == "mssql") {
+		!(sourceEngine == "mssql" && targetEngine == "mssql") &&
+		!(sourceEngine == "mssql" && targetEngine == "postgres") {
 		return NewTransferError(
 			ErrorClassPolicy,
 			fmt.Errorf(
