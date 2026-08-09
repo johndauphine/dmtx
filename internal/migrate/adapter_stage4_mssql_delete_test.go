@@ -207,6 +207,131 @@ func TestSQLServerDeleteCompositeIntegerKeyAuthorityAndBounds(t *testing.T) {
 	}
 }
 
+func TestSQLServerToPostgresDeleteCompositeIntegerKeyProofFailsClosed(t *testing.T) {
+	source := sqlServerDeleteTestTable("dbo", "items")
+	target := source
+	target.Schema = "public"
+	target.Columns = append([]schema.Column(nil), source.Columns...)
+	// SQL Server's portable int spelling is projected to PostgreSQL integer.
+	target.Columns[1].Type = "integer"
+	sourceAuthority := sqlServerDeleteTestAuthority(t, source, false)
+	targetKey, err := deletePrimaryKeyColumns(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAuthority := postgresDeleteCatalogAuthority{
+		ServerAddress: "127.0.0.1", CurrentUser: "dmtx", SystemIdentifier: "test",
+		DatabaseOID: 1, SchemaOwnerOID: 2, SchemaOID: 3, RelationOwnerOID: 4,
+		RelationOID: 5, ConstraintOID: 6, IndexOID: 7, Database: "dmtx",
+		Schema: target.Schema, Table: target.Name, Constraint: "items_pkey",
+		TableShape: target, PrimaryKey: targetKey, CanSelect: true, CanDelete: true,
+		HasSchemaUsage: true, ServerEncoding: "UTF8", ServerVersion: 160000,
+		IndexKeys: []postgresDeleteIndexKeyAuthority{
+			{Position: 1, Column: "tenant_id", OperatorClassNamespace: "pg_catalog", OperatorClass: "int8_ops"},
+			{Position: 2, Column: "item_id", OperatorClassNamespace: "pg_catalog", OperatorClass: "int4_ops"},
+		},
+	}
+	targetAuthority.CatalogDigest, err = postgresDeleteAuthorityDigestValue(targetAuthority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []struct {
+		name     string
+		position int
+		opClass  string
+	}{
+		{name: "non-empty wrong width", position: 0, opClass: "int4_ops"},
+		{name: "non-empty wrong width reverse", position: 1, opClass: "int8_ops"},
+		{name: "wrong operator class", position: 0, opClass: "text_ops"},
+		{name: "custom operator class", position: 0, opClass: "dmtx_int8_ops"},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			unsafeAuthority := targetAuthority
+			unsafeAuthority.IndexKeys = append([]postgresDeleteIndexKeyAuthority(nil), targetAuthority.IndexKeys...)
+			unsafeAuthority.IndexKeys[mutation.position].OperatorClass = mutation.opClass
+			var digestErr error
+			unsafeAuthority.CatalogDigest, digestErr = postgresDeleteAuthorityDigestValue(unsafeAuthority)
+			if digestErr != nil {
+				t.Fatal(digestErr)
+			}
+			if _, err := newSQLServerToPostgresDeleteKeyCanonicalizer(source, target, sourceAuthority, unsafeAuthority); err == nil {
+				t.Fatalf("%s was admitted", mutation.name)
+			}
+		})
+	}
+	canonicalizer, err := newSQLServerToPostgresDeleteKeyCanonicalizer(source, target, sourceAuthority, targetAuthority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceKey, err := deletePrimaryKeyColumns(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := canonicalizer.ProveDeleteKeyEquality(source, target, sourceKey, targetKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, values := range []struct{ source, target any }{{int64(4), []byte("4")}, {int32(9), int64(9)}} {
+		left, err := canonicalizer.CanonicalizeDeleteKeyValue(deleteKeySourceSide, proof, index, values.source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		right, err := canonicalizer.CanonicalizeDeleteKeyValue(deleteKeyTargetSide, proof, index, values.target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(left.Canonical, right.Canonical) || right.Parameter == nil {
+			t.Fatalf("key %d lacks cross-engine canonical equality: %#v / %#v", index, left, right)
+		}
+	}
+	unsafeTarget := targetAuthority
+	unsafeTarget.PrimaryKey = append([]schema.Column(nil), targetAuthority.PrimaryKey...)
+	unsafeTarget.PrimaryKey[1].Type = "text"
+	if err := validateSQLServerToPostgresDeleteKeyPair(sourceKey, unsafeTarget.PrimaryKey); err == nil {
+		t.Fatal("text primary key was admitted cross-engine")
+	}
+	narrowTarget := targetAuthority.PrimaryKey
+	narrowTarget = append([]schema.Column(nil), narrowTarget...)
+	narrowTarget[0].Type = "integer"
+	if err := validateSQLServerToPostgresDeleteKeyPair(sourceKey, narrowTarget); err == nil {
+		t.Fatal("narrowed bigint primary key was admitted cross-engine")
+	}
+}
+
+func TestStage4SQLServerToPostgresDeletePlanKeyPreflightFailsBeforeActivation(t *testing.T) {
+	validSource := sqlServerDeleteTestTable("dbo", "items")
+	validTarget := validSource
+	validTarget.Schema = "public"
+	validTarget.Columns = append([]schema.Column(nil), validSource.Columns...)
+	validTarget.Columns[1].Type = "integer"
+	for name, mutate := range map[string]func(*schema.Table, *schema.Table){
+		"text":  func(_ *schema.Table, target *schema.Table) { target.Columns[1].Type = "text" },
+		"width": func(_ *schema.Table, target *schema.Table) { target.Columns[0].Type = "integer" },
+		"reordered": func(_ *schema.Table, target *schema.Table) {
+			target.Columns[0].PrimaryKeyPosition, target.Columns[1].PrimaryKeyPosition = 2, 1
+		},
+		"nullable": func(_ *schema.Table, target *schema.Table) { target.Columns[0].Nullable = true },
+		"missing": func(_ *schema.Table, target *schema.Table) {
+			target.Columns[1].PrimaryKey = false
+			target.Columns[1].PrimaryKeyPosition = 0
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source, target := validSource, validTarget
+			source.Columns = append([]schema.Column(nil), validSource.Columns...)
+			target.Columns = append([]schema.Column(nil), validTarget.Columns...)
+			mutate(&source, &target)
+			err := preflightStage4SQLServerToPostgresDeletePlanKeys("mssql", "postgres", []adapterTablePlan{{source: source, target: target}})
+			if err == nil {
+				t.Fatal("unsafe key plan reached activation")
+			}
+		})
+	}
+	if err := preflightStage4SQLServerToPostgresDeletePlanKeys("mssql", "postgres", []adapterTablePlan{{source: validSource, target: validTarget}}); err != nil {
+		t.Fatalf("valid integer key plan refused before activation: %v", err)
+	}
+}
+
 func TestSQLServerDeleteNormalizesEmptyCatalogObjectLists(t *testing.T) {
 	target := sqlServerDeleteTestTable("target", "items")
 	observedTarget := target
@@ -458,12 +583,15 @@ func TestSQLServerDeleteTableLockQueriesNeverUseTopZero(t *testing.T) {
 	}
 }
 
-func TestStage4DeleteCompositionAdmitsOnlySQLServerSameEngineCell(t *testing.T) {
+func TestStage4DeleteCompositionAdmitsOnlyCertifiedSQLServerCells(t *testing.T) {
 	cfg, prepared := stage4PostgresDeleteRunnerFixture()
 	if err := requireStage4AdapterPostgresDeleteComposition(cfg, "mssql", "mssql", prepared); err != nil {
 		t.Fatalf("MSSQL-to-MSSQL delete cell was refused: %v", err)
 	}
-	if err := requireStage4AdapterPostgresDeleteComposition(cfg, "mssql", "postgres", prepared); err == nil || !strings.Contains(err.Error(), "atomic-receipt capability") {
+	if err := requireStage4AdapterPostgresDeleteComposition(cfg, "mssql", "postgres", prepared); err != nil {
+		t.Fatalf("certified SQL Server-to-PostgreSQL delete cell was refused: %v", err)
+	}
+	if err := requireStage4AdapterPostgresDeleteComposition(cfg, "mssql", "mysql", prepared); err == nil || !strings.Contains(err.Error(), "atomic-receipt capability") {
 		t.Fatalf("uncertified SQL Server cross-engine delete cell was admitted: %v", err)
 	}
 }

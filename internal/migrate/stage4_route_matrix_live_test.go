@@ -39,8 +39,9 @@ func stage4MatrixEndpoint(engine string, role string) config.Endpoint {
 
 // TestStage4CertifiedRelationalDeleteRouteMatrixLive enumerates every relational
 // source/target pair and pins which cells delete reconciliation is certified
-// for. PostgreSQL-to-PostgreSQL, SQLite-to-SQLite, and SQL Server
-// 2022-to-SQL Server 2022 are certified directly; canonical mysql-to-mysql
+// for. PostgreSQL-to-PostgreSQL, SQLite-to-SQLite, SQL Server 2022-to-SQL
+// Server 2022, and the integer-key SQL Server 2022-to-PostgreSQL 16 route are
+// certified directly; canonical mysql-to-mysql
 // reaches the live flavor/key capability, which accepts only same-flavor
 // MySQL 8.0 or MariaDB 10.11 pairs. Every other cell is proven to refuse
 // before any target mutation, rather than being merely undocumented.
@@ -76,6 +77,7 @@ func TestStage4CertifiedRelationalDeleteRouteMatrixLive(t *testing.T) {
 					(source == "postgres" && target == "postgres") ||
 						(source == "sqlite" && target == "sqlite") ||
 						(source == "mssql" && target == "mssql") ||
+						(source == "mssql" && target == "postgres") ||
 						((source == "mysql" || source == "mariadb") &&
 							(target == "mysql" || target == "mariadb"))
 				err := requireStage4AdapterConfigurationSeams(cfg)
@@ -100,7 +102,7 @@ func TestStage4CertifiedRelationalDeleteRouteMatrixLive(t *testing.T) {
 				}
 				if !strings.Contains(
 					err.Error(),
-					"certified only for PostgreSQL-to-PostgreSQL, SQLite-to-SQLite, live same-flavor MySQL 8.0-to-MySQL 8.0 or MariaDB 10.11-to-MariaDB 10.11, and SQL Server 2022-to-SQL Server 2022",
+					"certified only for PostgreSQL-to-PostgreSQL, SQLite-to-SQLite, live same-flavor MySQL 8.0-to-MySQL 8.0 or MariaDB 10.11-to-MariaDB 10.11, SQL Server 2022-to-SQL Server 2022, and SQL Server 2022-to-PostgreSQL 16 integer primary keys",
 				) {
 					t.Fatalf("uncertified delete refusal = %v", err)
 				}

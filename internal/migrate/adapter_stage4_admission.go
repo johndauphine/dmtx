@@ -142,11 +142,12 @@ func requireStage4AdapterConfigurationSeams(cfg config.Config) error {
 			!((sourceEngine == "postgres" && targetEngine == "postgres") ||
 				(sourceEngine == "sqlite" && targetEngine == "sqlite") ||
 				(sourceEngine == "mysql" && targetEngine == "mysql") ||
-				(sourceEngine == "mssql" && targetEngine == "mssql")) {
+				(sourceEngine == "mssql" && targetEngine == "mssql") ||
+				(sourceEngine == "mssql" && targetEngine == "postgres")) {
 			return NewTransferError(
 				ErrorClassPolicy,
 				fmt.Errorf(
-					"Stage 4 delete reconciliation is currently certified only for PostgreSQL-to-PostgreSQL, SQLite-to-SQLite, live same-flavor MySQL 8.0-to-MySQL 8.0 or MariaDB 10.11-to-MariaDB 10.11, and SQL Server 2022-to-SQL Server 2022",
+					"Stage 4 delete reconciliation is currently certified only for PostgreSQL-to-PostgreSQL, SQLite-to-SQLite, live same-flavor MySQL 8.0-to-MySQL 8.0 or MariaDB 10.11-to-MariaDB 10.11, SQL Server 2022-to-SQL Server 2022, and SQL Server 2022-to-PostgreSQL 16 integer primary keys",
 				),
 			)
 		}

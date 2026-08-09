@@ -511,7 +511,8 @@ func TestStage4DeleteCapabilityGateKeepsUnimplementedCellsClosed(t *testing.T) {
 			certified := (source == "postgres" && target == "postgres") ||
 				(source == "sqlite" && target == "sqlite") ||
 				(source == "mysql" && target == "mysql") ||
-				(source == "mssql" && target == "mssql")
+				(source == "mssql" && target == "mssql") ||
+				(source == "mssql" && target == "postgres")
 			if certified && err != nil {
 				t.Fatalf("certified %s-to-%s cell was refused: %v", source, target, err)
 			}

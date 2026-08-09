@@ -681,6 +681,181 @@ type sqlServerDeleteKeyCanonicalizer struct {
 	proof       deleteKeyEqualityProof
 }
 
+// sqlServerToPostgresDeleteKeyCanonicalizer is the route-specific proof that
+// both engines represent the same ordered integer primary-key tuple. It does
+// not accept text, decimal, temporal, or binary values: their cross-driver
+// equality/ordering contracts need independent certification.
+type sqlServerToPostgresDeleteKeyCanonicalizer struct {
+	sourceTable schema.Table
+	targetTable schema.Table
+	proof       deleteKeyEqualityProof
+}
+
+func newSQLServerToPostgresDeleteKeyCanonicalizer(
+	sourceTable schema.Table,
+	targetTable schema.Table,
+	sourceAuthority sqlServerDeleteCatalogAuthority,
+	targetAuthority postgresDeleteCatalogAuthority,
+) (*sqlServerToPostgresDeleteKeyCanonicalizer, error) {
+	if err := validateSQLServerToPostgresDeleteKeyPair(sourceAuthority.PrimaryKey, targetAuthority.PrimaryKey); err != nil {
+		return nil, err
+	}
+	sourceExpected, err := sqlServerDeleteAuthorityDigestValue(sourceAuthority)
+	if err != nil || sourceAuthority.CatalogDigest != sourceExpected || validateLowerSHA256("SQL Server delete source catalog authority digest", sourceAuthority.CatalogDigest) != nil {
+		return nil, errors.New("SQL Server delete source catalog authority digest differs from exact catalog evidence")
+	}
+	targetExpected, err := postgresDeleteAuthorityDigestValue(targetAuthority)
+	if err != nil || targetAuthority.CatalogDigest != targetExpected || validateLowerSHA256("PostgreSQL delete target catalog authority digest", targetAuthority.CatalogDigest) != nil {
+		return nil, errors.New("PostgreSQL delete target catalog authority digest differs from exact catalog evidence")
+	}
+	if len(targetAuthority.IndexKeys) != len(targetAuthority.PrimaryKey) {
+		return nil, errors.New("PostgreSQL delete target primary-key index authority width differs")
+	}
+	sourceFingerprint, err := deleteKeyMetadataFingerprint(sourceTable, sourceAuthority.PrimaryKey)
+	if err != nil {
+		return nil, err
+	}
+	targetFingerprint, err := deleteKeyMetadataFingerprint(targetTable, targetAuthority.PrimaryKey)
+	if err != nil {
+		return nil, err
+	}
+	routeAuthority := sha256.Sum256([]byte(sourceAuthority.CatalogDigest + "\x00" + targetAuthority.CatalogDigest))
+	proof := deleteKeyEqualityProof{
+		CanonicalizerID:   "mssql-postgres-exact-integer-primary-key-v1:" + hex.EncodeToString(routeAuthority[:]),
+		SourceFingerprint: sourceFingerprint, TargetFingerprint: targetFingerprint,
+		Columns: make([]deleteKeyColumnProof, len(sourceAuthority.PrimaryKey)),
+	}
+	for index := range sourceAuthority.PrimaryKey {
+		targetIndex := targetAuthority.IndexKeys[index]
+		if targetIndex.Position != index+1 || targetIndex.Column != targetAuthority.PrimaryKey[index].Name ||
+			!isExactPostgresDeleteIntegerOperatorClass(targetAuthority.PrimaryKey[index], targetIndex) {
+			return nil, fmt.Errorf("PostgreSQL delete target primary-key column %s lacks exact backing-index authority", targetAuthority.PrimaryKey[index].Name)
+		}
+		proof.Columns[index].Semantics = "integer"
+	}
+	if _, err := validateDeleteKeyEqualityProof(proof, sourceTable, targetTable, sourceAuthority.PrimaryKey, targetAuthority.PrimaryKey); err != nil {
+		return nil, err
+	}
+	return &sqlServerToPostgresDeleteKeyCanonicalizer{sourceTable: cloneStage4RichTable(sourceTable), targetTable: cloneStage4RichTable(targetTable), proof: proof}, nil
+}
+
+func validateSQLServerToPostgresDeleteKeyPair(sourceKey, targetKey []schema.Column) error {
+	if len(sourceKey) == 0 || len(sourceKey) != len(targetKey) {
+		return errors.New("SQL Server-to-PostgreSQL delete primary-key widths differ")
+	}
+	for index := range sourceKey {
+		source, target := sourceKey[index], targetKey[index]
+		if source.Name != target.Name || source.PrimaryKeyPosition != index+1 || target.PrimaryKeyPosition != index+1 || source.Nullable || target.Nullable {
+			return fmt.Errorf("SQL Server-to-PostgreSQL delete primary-key column %d is not preserved in exact order", index+1)
+		}
+		if _, err := sqlServerDeleteProofSemantics(source); err != nil {
+			return fmt.Errorf("SQL Server-to-PostgreSQL source primary-key column %s: %w", source.Name, err)
+		}
+		semantics, err := postgresDeleteProofSemantics(target)
+		if err != nil {
+			return fmt.Errorf("SQL Server-to-PostgreSQL target primary-key column %s: %w", target.Name, err)
+		}
+		if semantics != "integer" {
+			return fmt.Errorf("SQL Server-to-PostgreSQL target primary-key column %s is not an exactly compatible integer", target.Name)
+		}
+		if !sqlServerPostgresDeleteIntegerWidthsMatch(source, target) {
+			return fmt.Errorf("SQL Server-to-PostgreSQL primary-key column %s changes integer width", source.Name)
+		}
+	}
+	return nil
+}
+
+// isExactPostgresDeleteIntegerOperatorClass admits only PostgreSQL's built-in
+// btree operator class for the already-validated target integer width. A
+// non-empty operator class can still impose different equality or ordering
+// semantics, so cross-engine delete reconciliation must not accept it.
+func isExactPostgresDeleteIntegerOperatorClass(
+	column schema.Column,
+	index postgresDeleteIndexKeyAuthority,
+) bool {
+	if index.OperatorClassNamespace != "pg_catalog" {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSpace(column.Type))
+	if opening := strings.IndexByte(base, '('); opening >= 0 {
+		base = strings.TrimSpace(base[:opening])
+	}
+	switch base {
+	case "int", "integer", "int4":
+		return index.OperatorClass == "int4_ops"
+	case "bigint", "int8":
+		return index.OperatorClass == "int8_ops"
+	default:
+		return false
+	}
+}
+
+func sqlServerPostgresDeleteIntegerWidthsMatch(source, target schema.Column) bool {
+	base := func(column schema.Column) string {
+		value := strings.ToLower(strings.TrimSpace(column.Type))
+		if opening := strings.IndexByte(value, '('); opening >= 0 {
+			value = strings.TrimSpace(value[:opening])
+		}
+		return value
+	}
+	sourceBase, targetBase := base(source), base(target)
+	switch sourceBase {
+	case "int", "integer", "int4":
+		return targetBase == "integer" || targetBase == "int" || targetBase == "int4"
+	case "bigint", "int8":
+		return targetBase == "bigint" || targetBase == "int8"
+	default:
+		return false
+	}
+}
+
+func (canonicalizer *sqlServerToPostgresDeleteKeyCanonicalizer) ProveDeleteKeyEquality(sourceTable, targetTable schema.Table, sourceKey, targetKey []schema.Column) (deleteKeyEqualityProof, error) {
+	if canonicalizer == nil || !reflect.DeepEqual(sourceTable, canonicalizer.sourceTable) || !reflect.DeepEqual(targetTable, canonicalizer.targetTable) {
+		return deleteKeyEqualityProof{}, errors.New("SQL Server-to-PostgreSQL delete key proof was requested for different tables")
+	}
+	sourceFingerprint, err := deleteKeyMetadataFingerprint(sourceTable, sourceKey)
+	if err != nil {
+		return deleteKeyEqualityProof{}, err
+	}
+	targetFingerprint, err := deleteKeyMetadataFingerprint(targetTable, targetKey)
+	if err != nil {
+		return deleteKeyEqualityProof{}, err
+	}
+	if sourceFingerprint != canonicalizer.proof.SourceFingerprint || targetFingerprint != canonicalizer.proof.TargetFingerprint {
+		return deleteKeyEqualityProof{}, errors.New("SQL Server-to-PostgreSQL delete primary-key metadata changed after capability admission")
+	}
+	proof := canonicalizer.proof
+	proof.Columns = append([]deleteKeyColumnProof(nil), proof.Columns...)
+	return proof, nil
+}
+
+func (canonicalizer *sqlServerToPostgresDeleteKeyCanonicalizer) CanonicalizeDeleteKeyValue(side deleteKeySide, proof deleteKeyEqualityProof, index int, value any) (deleteCanonicalValue, error) {
+	if canonicalizer == nil || !reflect.DeepEqual(proof, canonicalizer.proof) || index < 0 || index >= len(proof.Columns) {
+		return deleteCanonicalValue{}, errors.New("SQL Server-to-PostgreSQL delete key canonicalization proof differs")
+	}
+	canonical, err := canonicalValidationInteger(value)
+	if err != nil {
+		return deleteCanonicalValue{}, err
+	}
+	result := deleteCanonicalValue{Canonical: append([]byte(nil), canonical...)}
+	switch side {
+	case deleteKeySourceSide:
+		return result, nil
+	case deleteKeyTargetSide:
+		parameter, err := driver.DefaultParameterConverter.ConvertValue(value)
+		if err != nil {
+			return deleteCanonicalValue{}, fmt.Errorf("convert PostgreSQL delete parameter: %w", err)
+		}
+		result.Parameter, err = stableDeleteParameter(parameter)
+		if err != nil {
+			return deleteCanonicalValue{}, err
+		}
+		return result, nil
+	default:
+		return deleteCanonicalValue{}, fmt.Errorf("unknown SQL Server-to-PostgreSQL delete key side %q", side)
+	}
+}
+
 func newSQLServerDeleteKeyCanonicalizer(
 	sourceTable schema.Table,
 	targetTable schema.Table,

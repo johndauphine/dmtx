@@ -65,7 +65,7 @@ func TestStage4SQLServerStrictDeleteAdmissionRemainsSameEngineOnly(t *testing.T)
 		"postgres": {engines: [2]string{"postgres", "postgres"}, want: "strict consistency"},
 		"sqlite":   {engines: [2]string{"sqlite", "sqlite"}, want: "strict consistency"},
 		"mysql":    {engines: [2]string{"mysql", "mysql"}, want: "strict consistency"},
-		"cross":    {engines: [2]string{"mssql", "postgres"}, want: "atomic-receipt capability"},
+		"cross":    {engines: [2]string{"mssql", "postgres"}, want: "strict consistency"},
 	} {
 		t.Run("refuse_"+name, func(t *testing.T) {
 			strictCfg := cfg
