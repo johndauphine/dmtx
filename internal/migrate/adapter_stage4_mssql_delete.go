@@ -727,7 +727,8 @@ func newSQLServerToPostgresDeleteKeyCanonicalizer(
 	}
 	for index := range sourceAuthority.PrimaryKey {
 		targetIndex := targetAuthority.IndexKeys[index]
-		if targetIndex.Position != index+1 || targetIndex.Column != targetAuthority.PrimaryKey[index].Name || targetIndex.OperatorClassNamespace != "pg_catalog" || strings.TrimSpace(targetIndex.OperatorClass) == "" {
+		if targetIndex.Position != index+1 || targetIndex.Column != targetAuthority.PrimaryKey[index].Name ||
+			!isExactPostgresDeleteIntegerOperatorClass(targetAuthority.PrimaryKey[index], targetIndex) {
 			return nil, fmt.Errorf("PostgreSQL delete target primary-key column %s lacks exact backing-index authority", targetAuthority.PrimaryKey[index].Name)
 		}
 		proof.Columns[index].Semantics = "integer"
@@ -762,6 +763,31 @@ func validateSQLServerToPostgresDeleteKeyPair(sourceKey, targetKey []schema.Colu
 		}
 	}
 	return nil
+}
+
+// isExactPostgresDeleteIntegerOperatorClass admits only PostgreSQL's built-in
+// btree operator class for the already-validated target integer width. A
+// non-empty operator class can still impose different equality or ordering
+// semantics, so cross-engine delete reconciliation must not accept it.
+func isExactPostgresDeleteIntegerOperatorClass(
+	column schema.Column,
+	index postgresDeleteIndexKeyAuthority,
+) bool {
+	if index.OperatorClassNamespace != "pg_catalog" {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSpace(column.Type))
+	if opening := strings.IndexByte(base, '('); opening >= 0 {
+		base = strings.TrimSpace(base[:opening])
+	}
+	switch base {
+	case "int", "integer", "int4":
+		return index.OperatorClass == "int4_ops"
+	case "bigint", "int8":
+		return index.OperatorClass == "int8_ops"
+	default:
+		return false
+	}
 }
 
 func sqlServerPostgresDeleteIntegerWidthsMatch(source, target schema.Column) bool {

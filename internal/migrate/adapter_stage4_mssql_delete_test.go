@@ -235,6 +235,30 @@ func TestSQLServerToPostgresDeleteCompositeIntegerKeyProofFailsClosed(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, mutation := range []struct {
+		name     string
+		position int
+		opClass  string
+	}{
+		{name: "non-empty wrong width", position: 0, opClass: "int4_ops"},
+		{name: "non-empty wrong width reverse", position: 1, opClass: "int8_ops"},
+		{name: "wrong operator class", position: 0, opClass: "text_ops"},
+		{name: "custom operator class", position: 0, opClass: "dmtx_int8_ops"},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			unsafeAuthority := targetAuthority
+			unsafeAuthority.IndexKeys = append([]postgresDeleteIndexKeyAuthority(nil), targetAuthority.IndexKeys...)
+			unsafeAuthority.IndexKeys[mutation.position].OperatorClass = mutation.opClass
+			var digestErr error
+			unsafeAuthority.CatalogDigest, digestErr = postgresDeleteAuthorityDigestValue(unsafeAuthority)
+			if digestErr != nil {
+				t.Fatal(digestErr)
+			}
+			if _, err := newSQLServerToPostgresDeleteKeyCanonicalizer(source, target, sourceAuthority, unsafeAuthority); err == nil {
+				t.Fatalf("%s was admitted", mutation.name)
+			}
+		})
+	}
 	canonicalizer, err := newSQLServerToPostgresDeleteKeyCanonicalizer(source, target, sourceAuthority, targetAuthority)
 	if err != nil {
 		t.Fatal(err)
