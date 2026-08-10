@@ -6,6 +6,12 @@ import (
 	"strconv"
 )
 
+// listJobs reports retained server jobs so a new console can recover work
+// without trusting tab-local state.
+func (server *Server) listJobs(writer http.ResponseWriter, request *http.Request) {
+	writeJSON(writer, http.StatusOK, server.jobs.list())
+}
+
 // startJob accepts a command and returns immediately with its id.
 func (server *Server) startJob(writer http.ResponseWriter, request *http.Request) {
 	decoded, ok := server.decodeRequest(writer, request)

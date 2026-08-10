@@ -90,6 +90,9 @@ type Server struct {
 	// work.
 	jobs *jobs
 
+	// setup drives one application-owned guided setup conversation.
+	setup setupState
+
 	// handoffSecret authenticates the handoff handshake. It is a third secret,
 	// separate from the launch and session values, because it authenticates a
 	// different party for a different purpose: another process on this machine
@@ -249,8 +252,20 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("DELETE /api/v1/session/{key}", server.auth.require(
 		http.HandlerFunc(server.clearSession),
 	))
+	mux.Handle("POST /api/v1/setup/start", server.auth.require(
+		http.HandlerFunc(server.setupStart),
+	))
+	mux.Handle("GET /api/v1/setup/prompt", server.auth.require(
+		http.HandlerFunc(server.setupPrompt),
+	))
+	mux.Handle("POST /api/v1/setup/input", server.auth.require(
+		http.HandlerFunc(server.setupInput),
+	))
 	mux.Handle("POST /api/v1/jobs", server.auth.require(
 		http.HandlerFunc(server.startJob),
+	))
+	mux.Handle("GET /api/v1/jobs", server.auth.require(
+		http.HandlerFunc(server.listJobs),
 	))
 	mux.Handle("GET /api/v1/jobs/{id}", server.auth.require(
 		http.HandlerFunc(server.jobStatus),
@@ -262,7 +277,7 @@ func (server *Server) routes() http.Handler {
 		http.HandlerFunc(server.cancelJob),
 	))
 	mux.Handle("GET /", server.auth.require(
-		http.HandlerFunc(server.placeholder),
+		http.HandlerFunc(server.console),
 	))
 	return server.activity.track(mux)
 }

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
@@ -21,13 +20,13 @@ func executePreflightWithProbe(
 	probe func(context.Context, config.Config) ([]productionPreflightFact, bool),
 ) Outcome {
 	out := newOutcome(request.Command)
-	if request.ConfigPath == "" {
+	if request.ConfigPath == "" && request.ProfileName == "" {
 		return out.failWith(
 			ConfigurationError,
-			"usage: dmtx preflight --config migration.yaml",
+			"usage: dmtx preflight --config migration.yaml | --profile NAME",
 		)
 	}
-	data, err := os.ReadFile(request.ConfigPath)
+	data, _, err := configurationData(request)
 	if err != nil {
 		return out.failWith(FileError, "read configuration: "+err.Error())
 	}

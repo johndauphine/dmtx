@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DMTX Console</title></head>
+<body>
+  <main>
+    <h1>DMTX Console</h1>
+    <p id="commands">Loading commands...</p>
+    <pre id="output" aria-live="polite">Ready.</pre>
+    <form id="command-form">
+      <input id="line" list="suggestions" autocomplete="off" autofocus placeholder="status --state state.db">
+      <button type="submit">Run</button>
+      <button id="cancel" type="button" disabled>Cancel job</button>
+    </form>
+    <datalist id="suggestions"></datalist>
+  </main>
+  <script>
+    const output = document.querySelector("#output");
+    const line = document.querySelector("#line");
+    const suggestions = document.querySelector("#suggestions");
+    const cancel = document.querySelector("#cancel");
+    const historyKey = "dmtx-console-history";
+    let activeJob = null;
+    let cancelling = false;
+    let historyIndex = -1;
+    const watchedJobs = new Set();
+    let history = JSON.parse(localStorage.getItem(historyKey) || "[]");
+    let setupActive = false;
+    let setupMasked = false;
+    const show = value => { output.textContent += "\n" + value; };
+    let completionOptions = [];
+
+    function clearCompletionOptions() {
+      for (const option of completionOptions) option.remove();
+      completionOptions = [];
+    }
+
+    function renderSetupPrompt(prompt) {
+      setupMasked = Boolean(prompt.masked) && !prompt.done;
+      line.type = setupMasked ? "password" : "text";
+      if (prompt.error) show("Setup: " + prompt.error);
+      if (setupMasked) clearCompletionOptions();
+      if (prompt.text) show(prompt.text);
+      if (prompt.done) {
+        setupActive = false;
+        setupMasked = false;
+        return;
+      }
+      const details = [];
+      if (prompt.default) details.push("default: " + prompt.default);
+      if (prompt.choices && prompt.choices.length) details.push("choices: " + prompt.choices.join(", "));
+      show(details.length ? "[" + details.join("; ") + "]" : "");
+    }
+
+    async function request(path, body) {
+      const response = await fetch(path, {
+        method: body ? "POST" : "GET",
+        headers: body ? {"Content-Type": "application/json"} : {},
+        body: body ? JSON.stringify(body) : undefined,
+        credentials: "same-origin"
+      });
+      const text = await response.text();
+      let result = {};
+      if (text) {
+        try {
+          result = JSON.parse(text);
+        } catch (_) {
+          throw new Error("server returned an invalid response");
+        }
+      }
+      if (!response.ok) throw new Error(result.error || "request failed");
+      return result;
+    }
+
+    function renderOutcome(outcome, wasCancelled = false) {
+      if (wasCancelled || outcome.exit_code === 130) {
+        show("Cancelled.");
+      }
+      const messages = (outcome.messages || []).map(message => message.text).filter(Boolean);
+      if (messages.length) {
+        show(messages.join("\n"));
+        return;
+      }
+      if (outcome.exit_code === 130) {
+        return;
+      }
+      if (outcome.exit_code === 0) {
+        show("Completed.");
+        return;
+      }
+      show("Finished with exit code " + (outcome.exit_code ?? "unknown") + ".");
+    }
+
+    function finish(id, outcome) {
+      watchedJobs.delete(id);
+      const wasCancelled = activeJob === id && cancelling;
+      if (activeJob === id) {
+        activeJob = null;
+        cancelling = false;
+        cancel.disabled = true;
+      }
+      renderOutcome(outcome || {}, wasCancelled);
+    }
+
+    async function loadCommands() {
+      const commands = await request("/api/v1/commands");
+      for (const command of commands) {
+        const option = document.createElement("option");
+        option.value = command.name;
+        suggestions.append(option);
+      }
+      document.querySelector("#commands").textContent =
+        "Commands: " + commands.map(command => command.name).join(", ");
+    }
+
+    function remember(typed) {
+      history = [typed, ...history.filter(entry => entry !== typed)].slice(0, 50);
+      localStorage.setItem(historyKey, JSON.stringify(history));
+    }
+
+    async function completePath() {
+      if (setupActive && setupMasked) {
+        clearCompletionOptions();
+        return;
+      }
+      clearCompletionOptions();
+      const marker = line.value.lastIndexOf("@");
+      if (marker < 0) return;
+      const prefix = line.value.slice(marker + 1);
+      const result = await request("/api/v1/complete?prefix=" + encodeURIComponent(prefix));
+      if (setupActive && setupMasked) return;
+      for (const entry of result.entries) {
+        const option = document.createElement("option");
+        option.value = line.value.slice(0, marker + 1) + entry.path + (entry.dir ? "/" : "");
+        suggestions.append(option);
+        completionOptions.push(option);
+      }
+    }
+
+    function watch(id) {
+      if (watchedJobs.has(id)) return;
+      watchedJobs.add(id);
+      activeJob = id;
+      cancelling = false;
+      cancel.disabled = false;
+      const events = new EventSource("/api/v1/jobs/" + id + "/events");
+      events.addEventListener("progress", event => show(event.data));
+      events.addEventListener("finished", event => {
+        events.close();
+        try {
+          finish(id, JSON.parse(event.data));
+        } catch (_) {
+          request("/api/v1/jobs/" + id).then(job => {
+            if (job.state === "finished") finish(id, job.outcome || {});
+          }).catch(error => show(error.message));
+        }
+      });
+      events.onerror = () => {
+        request("/api/v1/jobs/" + id).then(job => {
+          if (job.state === "finished") {
+            events.close();
+            finish(id, job.outcome || {});
+          }
+        }).catch(error => show(error.message));
+      };
+    }
+
+    async function recoverJobs() {
+      const jobs = await request("/api/v1/jobs");
+      for (const job of jobs) {
+        if (job.state === "running") {
+          show("Reattached to " + job.command + ".");
+          watch(job.id);
+          continue;
+        }
+        const status = await request("/api/v1/jobs/" + job.id);
+        if (status.state === "finished") {
+          show("Recent " + job.command + ".");
+          renderOutcome(status.outcome || {});
+        }
+      }
+    }
+
+    line.addEventListener("input", () => {
+      if (setupActive && setupMasked) {
+        clearCompletionOptions();
+        return;
+      }
+      completePath().catch(() => {});
+    });
+    line.addEventListener("keydown", event => {
+      if (setupActive && setupMasked) return;
+      if (event.key !== "ArrowUp" || !history.length) return;
+      event.preventDefault();
+      historyIndex = Math.min(historyIndex + 1, history.length - 1);
+      line.value = history[historyIndex];
+    });
+    line.addEventListener("input", () => {
+      if (!setupActive || !setupMasked) historyIndex = -1;
+    });
+    cancel.addEventListener("click", () => {
+      if (!activeJob || cancelling) return;
+      cancelling = true;
+      cancel.disabled = true;
+      request("/api/v1/jobs/" + activeJob + "/cancel", {}).then(result => {
+        if (result.state !== "cancelling") throw new Error("server did not accept cancellation");
+        show("Cancellation requested. Waiting for the command to stop safely.");
+      }).catch(error => {
+        cancelling = false;
+        if (activeJob) cancel.disabled = false;
+        show(error.message);
+      });
+    });
+
+    document.querySelector("#command-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const typed = setupActive && setupMasked ? line.value : line.value.trim();
+      if (!typed) return;
+      if (!setupActive || !setupMasked) remember(typed);
+      historyIndex = -1;
+      show("> " + (setupActive && setupMasked ? "[REDACTED]" : typed));
+      try {
+        if (setupActive) {
+          const prompt = await request("/api/v1/setup/input", {input: typed});
+          renderSetupPrompt(prompt);
+          line.value = "";
+          return;
+        }
+        if (typed === "setup" || typed === "setup postgres") {
+          const engine = typed === "setup postgres" ? "postgres" : "sqlite";
+          const prompt = await request("/api/v1/setup/start", {engine});
+          setupActive = true;
+          renderSetupPrompt(prompt);
+          line.value = "";
+          return;
+        }
+        const parsed = await request("/api/v1/parse", {line: typed});
+        if (!parsed.dispatched) {
+          show((parsed.outcome.messages || []).map(message => message.text).join("\n"));
+          return;
+        }
+        const started = await request("/api/v1/jobs", parsed.request);
+        show("Started " + started.command + ".");
+        watch(started.id);
+      } catch (error) {
+        show(error.message);
+      }
+    });
+
+    Promise.all([loadCommands(), recoverJobs()]).catch(error => show(error.message));
+  </script>
+</body>
+</html>

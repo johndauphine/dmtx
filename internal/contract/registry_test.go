@@ -2,6 +2,31 @@ package contract
 
 import "testing"
 
+func TestWebUISupportMatrix(t *testing.T) {
+	supported := map[string]bool{
+		"run": true, "resume": true, "status": true, "history": true,
+		"validate": true, "diagnose": true, "preflight": true, "analyze": true,
+		"init": true, "init-secrets": true, "config": true, "profile": true,
+	}
+	for _, command := range Commands {
+		if !supported[command.Name] {
+			continue
+		}
+		if command.WebUI != Supported {
+			t.Errorf("%s is WebUI %q, want supported", command.Name, command.WebUI)
+		}
+	}
+	for _, name := range []string{"ai", "setup"} {
+		command, ok := Resolve(name)
+		if !ok {
+			t.Fatalf("missing registered command %q", name)
+		}
+		if command.WebUI != Planned {
+			t.Errorf("unfinished command %s is WebUI %q, want planned", name, command.WebUI)
+		}
+	}
+}
+
 func TestEveryCommandHasFrontendDisposition(t *testing.T) {
 	if !Valid() {
 		t.Fatal("every registered command must declare TUI and WebUI disposition")

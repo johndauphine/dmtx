@@ -104,6 +104,7 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 		return Request{
 			Command:                "run",
 			ConfigPath:             options.configPath,
+			ProfileName:            options.profileName,
 			StatePath:              options.statePath,
 			DryRun:                 options.dryRun,
 			AcknowledgeDestructive: options.destructiveAcknowledged,
@@ -116,6 +117,7 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 		return Request{
 			Command:                "resume",
 			ConfigPath:             options.configPath,
+			ProfileName:            options.profileName,
 			StatePath:              options.statePath,
 			AcknowledgeDestructive: options.destructiveAcknowledged,
 			ForceResume:            options.forceResume,
@@ -129,21 +131,21 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 		}
 		return request, Outcome{}, true
 	case "validate":
-		request := Request{Command: "validate"}
-		if len(args) == 3 && args[1] == "--config" {
-			request.ConfigPath = args[2]
+		request, ok := configOriginArguments("validate", args[1:])
+		if !ok {
+			return Request{}, out.failWith(ConfigurationError, "usage: dmtx validate (--config migration.yaml | --profile NAME)"), false
 		}
 		return request, Outcome{}, true
 	case "config":
-		request := Request{Command: "config"}
-		if len(args) == 3 && args[1] == "--config" {
-			request.ConfigPath = args[2]
+		request, ok := configOriginArguments("config", args[1:])
+		if !ok {
+			return Request{}, out.failWith(ConfigurationError, "usage: dmtx config (--config migration.yaml | --profile NAME)"), false
 		}
 		return request, Outcome{}, true
 	case "analyze":
-		request := Request{Command: "analyze"}
-		if len(args) == 3 && args[1] == "--config" {
-			request.ConfigPath = args[2]
+		request, ok := configOriginArguments("analyze", args[1:])
+		if !ok {
+			return Request{}, out.failWith(ConfigurationError, "usage: dmtx analyze (--config migration.yaml | --profile NAME)"), false
 		}
 		return request, Outcome{}, true
 	case "init":
@@ -175,14 +177,55 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 	case "preflight", "health-check":
 		// The alias is resolved here so nothing downstream has to know it
 		// exists.
-		request := Request{Command: "preflight"}
-		if len(args) == 3 && args[1] == "--config" {
-			request.ConfigPath = args[2]
+		request, ok := configOriginArguments("preflight", args[1:])
+		if !ok {
+			return Request{}, out.failWith(ConfigurationError, "usage: dmtx preflight (--config migration.yaml | --profile NAME)"), false
+		}
+		return request, Outcome{}, true
+	case "profile":
+		request, ok := profileArguments(args[1:])
+		if !ok {
+			return Request{}, out.failWith(ConfigurationError, "usage: dmtx profile save NAME --config migration.yaml | list | delete NAME"), false
 		}
 		return request, Outcome{}, true
 	default:
 		return Request{}, classifyUnhandled(out, args[0]), false
 	}
+}
+
+func configOriginArguments(command string, args []string) (Request, bool) {
+	if len(args) == 0 {
+		return Request{Command: command}, true
+	}
+	if len(args) != 2 || args[1] == "" {
+		return Request{}, false
+	}
+	request := Request{Command: command}
+	switch args[0] {
+	case "--config":
+		request.ConfigPath = args[1]
+	case "--profile":
+		request.ProfileName = args[1]
+	default:
+		return Request{}, false
+	}
+	return request, true
+}
+
+func profileArguments(args []string) (Request, bool) {
+	if len(args) == 1 && args[0] == "list" {
+		return Request{Command: "profile", ProfileAction: "list"}, true
+	}
+	if len(args) == 2 && args[0] == "delete" && args[1] != "" {
+		return Request{Command: "profile", ProfileAction: "delete", ProfileName: args[1]}, true
+	}
+	if len(args) == 4 && args[0] == "save" && args[1] != "" && args[2] == "--config" && args[3] != "" {
+		return Request{Command: "profile", ProfileAction: "save", ProfileName: args[1], ConfigPath: args[3]}, true
+	}
+	if len(args) == 2 && args[0] == "export" && args[1] != "" {
+		return Request{Command: "profile", ProfileAction: "export", ProfileName: args[1]}, true
+	}
+	return Request{}, false
 }
 
 // initArguments reads init's flags, refusing anything it does not know.
@@ -317,6 +360,8 @@ func ExecuteWithProgress(
 		return executeAnalyze(ctx, request)
 	case "init":
 		return executeInit(request)
+	case "profile":
+		return executeProfile(request)
 	case "init-secrets":
 		return executeInitSecrets(request)
 	case "run":
@@ -338,13 +383,17 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 	statePath := options.statePath
 	dryRun := options.dryRun
 	destructiveAcknowledged := options.destructiveAcknowledged
-	data, err := os.ReadFile(configPath)
+	data, _, err := configurationData(request)
 	if err != nil {
 		return out.failWith(FileError, "read configuration: "+err.Error())
 	}
 	cfg, err := config.Parse(data)
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
+	}
+	auditPath := configPath
+	if auditPath == "" {
+		auditPath = statePath
 	}
 	if err := migrate.ValidateMigration(cfg); err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
@@ -455,7 +504,7 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 		}
 		return out.failWith(StateError, "Stage 4 spool directory: "+err.Error())
 	}
-	if err := appendAudit(configPath, runID, "run_started"); err != nil {
+	if err := appendAudit(auditPath, runID, "run_started"); err != nil {
 		return out.failWith(StateError, err.Error())
 	}
 	if err := appLifecycleBoundary("run_initialized"); err != nil {
@@ -468,7 +517,7 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 		guard:          guard,
 		resume:         false,
 		spoolDirectory: spoolDirectory,
-		configPath:     configPath,
+		configPath:     auditPath,
 		progress:       progress,
 	}
 	result, err := migrate.Execute(migrationContext, cfg, observer)
@@ -489,7 +538,7 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 			return out.failWith(StateError, "record migration outcome: "+stateErr.Error())
 		}
 		if auditErr := appendAttemptTerminalAudit(
-			configPath,
+			auditPath,
 			runID,
 			"run",
 			result,
@@ -514,7 +563,7 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 		out.fail("migration: " + err.Error())
 		return out.done(disposition.exitCode)
 	}
-	if err := appendAudit(configPath, runID, "validation_completed"); err != nil {
+	if err := appendAudit(auditPath, runID, "validation_completed"); err != nil {
 		return out.failWith(StateError, err.Error())
 	}
 	published, err := publishStage4RunSuccess(observer, runSuccessReason)
@@ -545,7 +594,7 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 		return out.failWith(StateError, "release target lease: "+err.Error())
 	}
 	leaseReleased = true
-	if err := appendAudit(configPath, runID, "run_succeeded"); err != nil {
+	if err := appendAudit(auditPath, runID, "run_succeeded"); err != nil {
 		return out.failWith(StateError, err.Error())
 	}
 	if err := out.setPayload(PayloadResult, result); err != nil {
@@ -770,6 +819,12 @@ func runArguments(args []string) (runOptions, bool) {
 				return runOptions{}, false
 			}
 			options.configPath = args[index+1]
+			index++
+		case "--profile":
+			if index+1 >= len(args) || options.profileName != "" {
+				return runOptions{}, false
+			}
+			options.profileName = args[index+1]
 			index++
 		case "--state":
 			if index+1 >= len(args) || options.statePath != "" {

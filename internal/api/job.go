@@ -62,6 +62,7 @@ type job struct {
 	id      string
 	command string
 
+	started  time.Time
 	mutex    sync.Mutex
 	events   []jobEvent
 	kept     map[string]jobEvent
@@ -285,6 +286,7 @@ func (registry *jobs) start(request app.Request) (*job, error) {
 	running := &job{
 		id:      id,
 		command: request.Command,
+		started: time.Now(),
 		changed: make(chan struct{}),
 		done:    make(chan struct{}),
 		cancel:  cancel,
@@ -324,6 +326,44 @@ func (registry *jobs) find(id string) (*job, bool) {
 	defer registry.mutex.Unlock()
 	running, ok := registry.byID[id]
 	return running, ok
+}
+
+// jobSummary is the server-owned, non-sensitive identity and state of a job.
+// It lets a newly loaded console find work it can watch without making a
+// browser tab the record of a migration.
+type jobSummary struct {
+	ID        string    `json:"id"`
+	Command   string    `json:"command"`
+	State     string    `json:"state"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+// list returns retained jobs newest first. Finished jobs remain visible for
+// the normal retention period so a reopened console can present their outcome.
+func (registry *jobs) list() []jobSummary {
+	registry.mutex.Lock()
+	defer registry.mutex.Unlock()
+
+	registry.forgetFinished()
+	listed := make([]jobSummary, 0, len(registry.byID))
+	for _, running := range registry.byID {
+		running.mutex.Lock()
+		state := "running"
+		if running.outcome != nil {
+			state = "finished"
+		}
+		listed = append(listed, jobSummary{
+			ID:        running.ID(),
+			Command:   running.command,
+			State:     state,
+			StartedAt: running.started,
+		})
+		running.mutex.Unlock()
+	}
+	sort.Slice(listed, func(first, second int) bool {
+		return listed[first].StartedAt.After(listed[second].StartedAt)
+	})
+	return listed
 }
 
 // cancel asks a job to stop. Stopping is cooperative: the command decides where

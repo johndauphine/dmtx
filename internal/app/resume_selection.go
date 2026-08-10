@@ -12,6 +12,7 @@ import (
 func resumeOptionsFrom(request Request) (resumeOptions, bool) {
 	options := resumeOptions{
 		configPath:              request.ConfigPath,
+		profileName:             request.ProfileName,
 		statePath:               request.StatePath,
 		destructiveAcknowledged: request.AcknowledgeDestructive,
 		forceResume:             request.ForceResume,
@@ -24,11 +25,15 @@ func resumeOptionsFrom(request Request) (resumeOptions, bool) {
 // validResumeOptions holds the rules both entry points must obey, so a surface
 // with no command line cannot request a combination the CLI refuses.
 func validResumeOptions(options resumeOptions) (resumeOptions, bool) {
-	if options.configPath == "" || options.abandon != (options.abandonReason != "") ||
+	if (options.configPath == "") == (options.profileName == "") ||
+		options.abandon != (options.abandonReason != "") ||
 		options.abandon && (options.forceResume || options.destructiveAcknowledged) {
 		return resumeOptions{}, false
 	}
 	if options.statePath == "" {
+		if options.configPath == "" {
+			return resumeOptions{}, false
+		}
 		options.statePath = options.configPath + ".state.db"
 	}
 	return options, true
@@ -43,6 +48,12 @@ func resumeArguments(args []string) (resumeOptions, bool) {
 				return resumeOptions{}, false
 			}
 			options.configPath = args[index+1]
+			index++
+		case "--profile":
+			if index+1 >= len(args) || options.profileName != "" {
+				return resumeOptions{}, false
+			}
+			options.profileName = args[index+1]
 			index++
 		case "--state":
 			if index+1 >= len(args) || options.statePath != "" {

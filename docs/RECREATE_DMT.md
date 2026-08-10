@@ -1373,8 +1373,8 @@ or accompanied by a reproducible live-database test.
 
 - [ ] One self-contained `dmtx` executable starts on every release platform.
 - [ ] `--version`, help, command aliases, global flags, exit codes, JSON routing,
-      TUI launch, and WebUI launch match Sections 3 and 18.
-- [ ] CLI/TUI/WebUI parity is machine-checked.
+      and WebUI launch match Sections 3 and 18. The TUI is deliberately omitted.
+- [ ] CLI/WebUI parity is machine-checked.
 - [ ] No AI configuration is needed for build, dry-run, migration, resume, or
       validation.
 

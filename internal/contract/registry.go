@@ -25,19 +25,20 @@ type Command struct {
 }
 
 var Commands = []Command{
-	{Name: "run", TUI: Planned, WebUI: Planned},
-	{Name: "resume", TUI: Planned, WebUI: Planned},
-	{Name: "status", TUI: Planned, WebUI: Planned},
-	{Name: "history", TUI: Planned, WebUI: Planned},
-	{Name: "validate", TUI: Planned, WebUI: Planned},
-	{Name: "diagnose", TUI: Planned, WebUI: Planned},
-	{Name: "preflight", Aliases: []string{"health-check"}, TUI: Planned, WebUI: Planned},
-	{Name: "analyze", TUI: Planned, WebUI: Planned},
-	{Name: "profile", TUI: Planned, WebUI: Planned},
-	{Name: "ai", TUI: Planned, WebUI: Planned},
-	{Name: "init", TUI: Planned, WebUI: Planned},
-	{Name: "init-secrets", TUI: Planned, WebUI: Planned},
-	{Name: "setup", TUI: Planned, WebUI: Planned},
+	// Stage 5 deliberately replaces the TUI with the authenticated WebUI.
+	{Name: "run", TUI: Omitted, WebUI: Supported},
+	{Name: "resume", TUI: Omitted, WebUI: Supported},
+	{Name: "status", TUI: Omitted, WebUI: Supported},
+	{Name: "history", TUI: Omitted, WebUI: Supported},
+	{Name: "validate", TUI: Omitted, WebUI: Supported},
+	{Name: "diagnose", TUI: Omitted, WebUI: Supported},
+	{Name: "preflight", Aliases: []string{"health-check"}, TUI: Omitted, WebUI: Supported},
+	{Name: "analyze", TUI: Omitted, WebUI: Supported},
+	{Name: "profile", TUI: Omitted, WebUI: Supported},
+	{Name: "ai", TUI: Omitted, WebUI: Planned},
+	{Name: "init", TUI: Omitted, WebUI: Supported},
+	{Name: "init-secrets", TUI: Omitted, WebUI: Supported},
+	{Name: "setup", TUI: Omitted, WebUI: Planned},
 	// cache is Omitted rather than Planned because there is nothing to clear.
 	// DMT's cache command clears a type-mapping cache; dmtx has none, and the
 	// only thing it keeps under the user cache directory is lease coordination
@@ -51,7 +52,7 @@ var Commands = []Command{
 	},
 	// config was in DMT's slash-command surface but missing here; without it a
 	// front end built from this registry would silently lack it.
-	{Name: "config", TUI: Planned, WebUI: Planned},
+	{Name: "config", TUI: Omitted, WebUI: Supported},
 	// serve starts the browser front end. It is Omitted for both interactive
 	// surfaces because it is the thing that launches them: a command to start
 	// the WebUI, offered inside the WebUI, is nonsense rather than a gap.
