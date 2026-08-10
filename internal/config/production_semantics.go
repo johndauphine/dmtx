@@ -153,7 +153,6 @@ const (
 )
 
 const (
-	DefaultHistoryRetentionDays  = 30
 	DefaultDeleteBatchSize       = 10_000
 	DefaultDeleteInterval        = 168 * time.Hour
 	DefaultRuntimeTuningInterval = 5 * time.Second
@@ -194,9 +193,6 @@ func applyProductionSemanticsDefaults(migration *Migration) {
 		if !migration.fieldWasSet("deletes.reconcile.require_primary_key") {
 			migration.Deletes.Reconcile.RequirePrimaryKey = true
 		}
-	}
-	if !migration.fieldWasSet("history_retention_days") {
-		migration.HistoryRetentionDays = DefaultHistoryRetentionDays
 	}
 	if !migration.fieldWasSet("tuning") {
 		migration.Tuning = TuningAuto
@@ -327,12 +323,6 @@ func validateProductionSemantics(migration Migration) error {
 		return fmt.Errorf(
 			"migration.deletes.mode has invalid value %q",
 			migration.Deletes.Mode,
-		)
-	}
-
-	if migration.HistoryRetentionDays < 0 {
-		return fmt.Errorf(
-			"migration.history_retention_days must not be negative",
 		)
 	}
 	switch migration.Tuning {

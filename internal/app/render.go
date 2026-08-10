@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 )
@@ -33,6 +34,23 @@ func RenderText(stdout, stderr io.Writer, outcome Outcome) error {
 		return err
 	}
 	return nil
+}
+
+// RenderProgress writes one Progress record to the CLI diagnostic stream.
+// Progress is deliberately limited to non-sensitive command/table counters;
+// this renderer does not inspect arbitrary data, so callers must not populate
+// Progress with secrets. Final outcomes remain machine-readable on stdout.
+func RenderProgress(writer io.Writer, progress Progress) error {
+	record := struct {
+		Event string   `json:"event"`
+		Data  Progress `json:"progress"`
+	}{Event: "progress", Data: progress}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(writer, "%s\n", data)
+	return err
 }
 
 // RenderJSON writes the whole Outcome, including its messages and exit code,

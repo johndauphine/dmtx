@@ -40,7 +40,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		_ = RenderText(stdout, stderr, outcome)
 		return outcome.ExitCode
 	}
-	outcome = Execute(context.Background(), request)
+	outcome = ExecuteWithProgress(context.Background(), request, func(progress Progress) {
+		_ = RenderProgress(stderr, progress)
+	})
 	if err := RenderText(stdout, stderr, outcome); err != nil {
 		fmt.Fprintf(stderr, "write output: %v\n", err)
 		return FileError

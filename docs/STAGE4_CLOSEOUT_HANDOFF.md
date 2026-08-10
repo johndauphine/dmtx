@@ -135,9 +135,8 @@ Two boundaries remain deliberate rather than open, and both are enforced by
 pre-mutation refusals with their own tests, so neither can widen by accident:
 cross-engine delete reconciliation stays refused except for the explicitly
 certified SQL Server 2022-to-PostgreSQL 16 integer-primary-key route; all
-other cross-engine cells remain pre-mutation refusals. `history_retention_days`
-has no Phase Four consumer because the stage boundary assigns retention to
-Stage 5.
+other cross-engine cells remain pre-mutation refusals. Durable operator history
+belongs to orchestration software; Stage 4 records no retention archive.
 
 ## Audit of the inherited tests — 2026-08-01
 

@@ -319,7 +319,6 @@ func TestParsedTransferIntentPreservesRequestedAndDerivedProvenance(t *testing.T
 		"max_retries",
 		"strict_consistency",
 		"strict_consistency_scope",
-		"history_retention_days",
 		"tuning",
 		"runtime_tuning",
 		"runtime_tuning_interval",
@@ -358,7 +357,6 @@ migration:
   max_retries: 0
   strict_consistency: false
   strict_consistency_scope: table
-  history_retention_days: 0
   tuning: auto
   runtime_tuning: false
   runtime_tuning_interval: 7s

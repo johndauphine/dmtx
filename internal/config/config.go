@@ -54,7 +54,6 @@ type Migration struct {
 	Validation            ValidationPolicy `yaml:"validation"`
 	Preflight             PreflightPolicy  `yaml:"preflight"`
 	Deletes               DeletePolicy     `yaml:"deletes"`
-	HistoryRetentionDays  int              `yaml:"history_retention_days"`
 	Tuning                TuningMode       `yaml:"tuning"`
 	RuntimeTuning         bool             `yaml:"runtime_tuning"`
 	RuntimeTuningInterval time.Duration    `yaml:"runtime_tuning_interval"`
