@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/johndauphine/dmtx/internal/config"
@@ -94,5 +95,17 @@ func TestSetupCancellationDoesNotWriteConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("cancelled setup wrote configuration: %v", err)
+	}
+}
+
+func TestSetupRejectsUnreadableOrNonregularSQLiteSourcesWithoutLeakingPaths(t *testing.T) {
+	directory := t.TempDir()
+	setup := NewSetup(filepath.Join(directory, "migration.yaml"))
+	missing := filepath.Join(directory, "source-sentinel.db")
+	if got := setup.Input(missing); got.Error != "source SQLite database is not readable" || strings.Contains(got.Error, "source-sentinel") {
+		t.Fatalf("missing source validation = %+v", got)
+	}
+	if got := setup.Input(directory); got.Error != "source SQLite database must be a regular file" || strings.Contains(got.Error, directory) {
+		t.Fatalf("nonregular source validation = %+v", got)
 	}
 }

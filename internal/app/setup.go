@@ -89,13 +89,8 @@ func (setup *Setup) Input(input string) SetupPrompt {
 		if value == "" {
 			value = "source.db"
 		}
-		info, err := os.Stat(value)
-		if err != nil {
-			setup.errorText = "source SQLite database is not readable"
-			return setup.prompt()
-		}
-		if !info.Mode().IsRegular() {
-			setup.errorText = "source SQLite database must be a regular file"
+		if err := validateSQLiteSource(value); err != nil {
+			setup.errorText = err.Error()
 			return setup.prompt()
 		}
 		setup.sourcePath = value
@@ -144,6 +139,21 @@ func (setup *Setup) Input(input string) SetupPrompt {
 	return setup.prompt()
 }
 
+func validateSQLiteSource(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return errors.New("source SQLite database is not readable")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return errors.New("source SQLite database is not readable")
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("source SQLite database must be a regular file")
+	}
+	return nil
+}
 func (setup *Setup) prompt() SetupPrompt {
 	prompt := SetupPrompt{Error: setup.errorText, ConfigPath: setup.configPath}
 	switch setup.step {

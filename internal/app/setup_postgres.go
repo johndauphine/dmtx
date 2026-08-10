@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/engine"
@@ -56,6 +57,8 @@ const (
 
 type postgresSetupVerifier func(context.Context, config.Endpoint) (*sql.DB, error)
 
+const postgresSetupVerificationTimeout = 5 * time.Second
+
 // PostgresSetup is the credentials-aware guided workflow. Passwords exist only
 // in process memory until both endpoints have been tested and the operator
 // confirms the write. The generated configuration contains file origins, never
@@ -70,6 +73,7 @@ type PostgresSetup struct {
 	error     string
 	cancelled bool
 	verify    postgresSetupVerifier
+	timeout   time.Duration
 }
 
 // NewPostgresSetup begins a PostgreSQL-to-PostgreSQL workflow.
@@ -81,7 +85,7 @@ func newPostgresSetup(configPath string, verify postgresSetupVerifier) *Postgres
 	if strings.TrimSpace(configPath) == "" {
 		configPath = defaultConfigFilename
 	}
-	return &PostgresSetup{path: configPath, verify: verify}
+	return &PostgresSetup{path: configPath, verify: verify, timeout: postgresSetupVerificationTimeout}
 }
 
 func (setup *PostgresSetup) Prompt() SetupPrompt {
@@ -214,7 +218,9 @@ func setupPort(value string) (int, bool) {
 func (setup *PostgresSetup) verifyEndpoint(endpoint config.Endpoint, side string) bool {
 	endpoint.Type = "postgres"
 	endpoint.SSLMode = "require"
-	database, err := setup.verify(context.Background(), endpoint)
+	verificationContext, cancel := context.WithTimeout(context.Background(), setup.timeout)
+	defer cancel()
+	database, err := setup.verify(verificationContext, endpoint)
 	if err != nil {
 		setup.error = side + " PostgreSQL connection could not be verified"
 		return false

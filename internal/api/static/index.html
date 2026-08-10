@@ -27,11 +27,18 @@
     let setupActive = false;
     let setupMasked = false;
     const show = value => { output.textContent += "\n" + value; };
+    let completionOptions = [];
+
+    function clearCompletionOptions() {
+      for (const option of completionOptions) option.remove();
+      completionOptions = [];
+    }
 
     function renderSetupPrompt(prompt) {
       setupMasked = Boolean(prompt.masked) && !prompt.done;
       line.type = setupMasked ? "password" : "text";
       if (prompt.error) show("Setup: " + prompt.error);
+      if (setupMasked) clearCompletionOptions();
       if (prompt.text) show(prompt.text);
       if (prompt.done) {
         setupActive = false;
@@ -111,14 +118,21 @@
     }
 
     async function completePath() {
+      if (setupActive && setupMasked) {
+        clearCompletionOptions();
+        return;
+      }
+      clearCompletionOptions();
       const marker = line.value.lastIndexOf("@");
       if (marker < 0) return;
       const prefix = line.value.slice(marker + 1);
       const result = await request("/api/v1/complete?prefix=" + encodeURIComponent(prefix));
+      if (setupActive && setupMasked) return;
       for (const entry of result.entries) {
         const option = document.createElement("option");
         option.value = line.value.slice(0, marker + 1) + entry.path + (entry.dir ? "/" : "");
         suggestions.append(option);
+        completionOptions.push(option);
       }
     }
 
@@ -166,14 +180,23 @@
       }
     }
 
-    line.addEventListener("input", () => completePath().catch(() => {}));
+    line.addEventListener("input", () => {
+      if (setupActive && setupMasked) {
+        clearCompletionOptions();
+        return;
+      }
+      completePath().catch(() => {});
+    });
     line.addEventListener("keydown", event => {
+      if (setupActive && setupMasked) return;
       if (event.key !== "ArrowUp" || !history.length) return;
       event.preventDefault();
       historyIndex = Math.min(historyIndex + 1, history.length - 1);
       line.value = history[historyIndex];
     });
-    line.addEventListener("input", () => { historyIndex = -1; });
+    line.addEventListener("input", () => {
+      if (!setupActive || !setupMasked) historyIndex = -1;
+    });
     cancel.addEventListener("click", () => {
       if (!activeJob || cancelling) return;
       cancelling = true;
