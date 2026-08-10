@@ -177,7 +177,6 @@ migration:
 	policyOnly.Migration.Validation.FailOnEstimateMismatch = false
 	policyOnly.Migration.Validation.Mode = ValidationSample
 	policyOnly.Migration.FailOnSchemaDrift = true
-	policyOnly.Migration.HistoryRetentionDays = 1
 	policyOnly.Migration.Tuning = TuningOff
 	policyOnly.Migration.RuntimeTuning = false
 	policyOnly.Migration.RuntimeTuningInterval = time.Second

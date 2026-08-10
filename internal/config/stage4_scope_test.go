@@ -1,31 +1,6 @@
 package config
 
-import (
-	"strings"
-	"testing"
-)
-
-func TestValidateBoundedStage4SettingsRejectsRemainingExplicitUnconsumedSettings(t *testing.T) {
-	tests := []struct {
-		name  string
-		yaml  string
-		field string
-	}{
-		{name: "history retention", yaml: "history_retention_days: 7", field: "history_retention_days"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			cfg, err := Parse([]byte("migration:\n  " + test.yaml + "\n"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := ValidateBoundedStage4Settings(cfg.Migration); err == nil ||
-				!strings.Contains(err.Error(), test.field) {
-				t.Fatalf("setting error = %v, want %q", err, test.field)
-			}
-		})
-	}
-}
+import "testing"
 
 func TestValidateBoundedStage4SettingsDefersLargeTableThresholdToRouteAdmission(t *testing.T) {
 	cfg, err := Parse([]byte("migration:\n  large_table_threshold: 100\n"))

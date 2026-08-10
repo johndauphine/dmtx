@@ -37,7 +37,6 @@ var canonicalMigrationIntentFieldOrder = []string{
 	"deletes.reconcile.interval",
 	"deletes.reconcile.batch_size",
 	"deletes.reconcile.require_primary_key",
-	"history_retention_days",
 	"tuning",
 	"runtime_tuning",
 	"runtime_tuning_interval",
@@ -199,12 +198,6 @@ func (migration Migration) MarshalYAML() (any, error) {
 	if deletes.hasValues() {
 		wire.Deletes = &deletes
 	}
-
-	if migration.fieldWasSet("history_retention_days") {
-		wire.HistoryRetentionDays = pointerTo(
-			migration.HistoryRetentionDays,
-		)
-	}
 	if migration.fieldWasSet("tuning") {
 		wire.Tuning = pointerTo(migration.Tuning)
 	}
@@ -246,7 +239,6 @@ type canonicalMigrationYAML struct {
 	Validation             *canonicalValidationYAML `yaml:"validation,omitempty"`
 	Preflight              *canonicalPreflightYAML  `yaml:"preflight,omitempty"`
 	Deletes                *canonicalDeletesYAML    `yaml:"deletes,omitempty"`
-	HistoryRetentionDays   *int                     `yaml:"history_retention_days,omitempty"`
 	Tuning                 *TuningMode              `yaml:"tuning,omitempty"`
 	RuntimeTuning          *bool                    `yaml:"runtime_tuning,omitempty"`
 	RuntimeTuningInterval  *time.Duration           `yaml:"runtime_tuning_interval,omitempty"`

@@ -189,10 +189,13 @@
     });
     line.addEventListener("keydown", event => {
       if (setupActive && setupMasked) return;
-      if (event.key !== "ArrowUp" || !history.length) return;
-      event.preventDefault();
-      historyIndex = Math.min(historyIndex + 1, history.length - 1);
-      line.value = history[historyIndex];
+      if (event.key === "ArrowUp") {
+        if (!history.length) return;
+        event.preventDefault();
+        historyIndex = Math.min(historyIndex + 1, history.length - 1);
+        line.value = history[historyIndex];
+        return;
+      }
     });
     line.addEventListener("input", () => {
       if (!setupActive || !setupMasked) historyIndex = -1;
@@ -215,7 +218,7 @@
       event.preventDefault();
       const typed = setupActive && setupMasked ? line.value : line.value.trim();
       if (!typed) return;
-      if (!setupActive || !setupMasked) remember(typed);
+      if (!setupActive) remember(typed);
       historyIndex = -1;
       show("> " + (setupActive && setupMasked ? "[REDACTED]" : typed));
       try {

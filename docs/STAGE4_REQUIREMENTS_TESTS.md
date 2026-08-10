@@ -88,7 +88,7 @@ this map. It records bounded implementation and automated evidence; it does
 - `checkpoint_frequency`, `upsert_merge_size`, and `large_table_threshold` now
   have bounded planning/transfer consumers; runtime tuning has bounded
   controller, persisted history, and terminal audit evidence. Explicit
-  `history_retention_days` remains a Stage 5 boundary.
+  durable operator history belongs to orchestration software; DMTX provides only browser-local recall.
 
 The armed `DMTX_STAGE4_LIVE_REQUIRED` process-kill/composed route matrix,
 unproven or deferred capability cells, cross-engine delete, and target protocol
@@ -158,7 +158,7 @@ live/process-kill composed matrix**.
 | Initialize cancellation and data-plane lifecycle hooks before mutation. | **Partial:** `TestStage2RunSIGTERMPersistsCancelledOutcome` and `TestSQLiteToSQLiteNotifiesTableCheckpointBoundaries`. | S4.8: `TestStage4CancellationInstalledBeforePreflight`; logs, metrics, traces, notifications, and their presentation remain Stage 5, with `TestLifecycleInitializesOperatorSinksBeforeMutation` reserved for that stage. |
 | Run preflight before destructive mutation; discover/filter source schema and side objects deterministically. | **Covered:** `TestAdapterRunnerPreflightFailurePreventsTasksAndMutation`, `TestAdapterRunnerRunsDestructivePreflightBeforeCheckpointOrMutation`, `TestSQLiteStrictSourcePreflightPrecedesCheckpointAndTargetMutation`, and deterministic source-discovery fixtures. | Armed per-engine schema/strict capability matrix. |
 | Compare the filtered schema to the latest successful deterministic snapshot and enforce policy. | **Covered; the "uncommitted primitives" note is obsolete.** `TestPrepareStage4SchemaGateSelectsLatestSuccessfulBaselineByRunOrder` and `TestPrepareStage4SchemaGateUsesLatestSuccessfulSnapshotAndPlansDrift` prove the selection and drift planning; `TestPrepareStage4SchemaGateEstablishesBaselineOnBothBackends`, `TestPrepareStage4SchemaGateWritesPlanBeforeReadsAndFailsClosed`, `TestPrepareStage4SchemaGateRejectsChangedSameRunStagedSnapshot`, and the three first-run/evolve fixtures cover the surrounding lifecycle. | Live matrix. |
-| Derive effective tuning without overwriting pinned intent. | **Covered:** `TestDeterministicTuningPreservesPinnedIntent` proves requested/derived provenance and repeat resolution; `TestRuntimeTuningHistoryIsBoundedOrderedAndImmutable`, `TestStage4RuntimeTuningHistorySQLiteConformance`, and `TestAppendAttemptTerminalAuditWritesRedactedRuntimeTuningBeforeOutcome` cover bounded controller/history/audit facts. | Operator presentation and `history_retention_days` remain Stage 5. |
+| Derive effective tuning without overwriting pinned intent. | **Covered:** `TestDeterministicTuningPreservesPinnedIntent` proves requested/derived provenance and repeat resolution; `TestRuntimeTuningHistoryIsBoundedOrderedAndImmutable`, `TestStage4RuntimeTuningHistorySQLiteConformance`, and `TestAppendAttemptTerminalAuditWritesRedactedRuntimeTuningBeforeOutcome` cover bounded controller/history/audit facts. | Durable operator history belongs to orchestration software; browser-local recall is the DMTX boundary. |
 | Establish migration-scoped strict source epoch before partition planning or target DDL. | **Covered for PostgreSQL and SQL Server migration scope.** PostgreSQL uses exported snapshots; SQL Server uses a durable, authenticated database snapshot with cleanup/recovery authority. `TestBeginPlannedStrictConsistencyBindsWorkInsideOpenEpoch`, `TestSQLServerMigrationStrictTopologySurvivesPreOwnerAndOrdinaryResume`, and `TestCleanupCompletedStage4SQLServerMigrationSnapshotBranches` cover the durable boundary. | Armed live/process-kill composition for every admitted source/target cell. |
 | Create every durable transfer task before target drop/truncate/create. | **Covered base:** `TestTaskInitializationFailurePrecedesTargetMutation`, `TestAdapterRunnerOrdersAllTableLifecycle`, and `TestAdapterRunnerRunsDestructivePreflightBeforeCheckpointOrMutation`. | S4.2: `TestStage4NetworkTasksDurableBeforeTargetMutationLive` for every target family. |
 | Prepare by target mode, transfer bounded rows, and finalize supported sequences/indexes/FKs/checks. | **Covered base:** Stage 2 bounded SQLite tests and Stage 3 native-target lifecycle/common fixtures. | S4.2: repeat through the resumable range protocol in `TestStage4CertifiedRelationalTransferLifecycleLive`. |
@@ -847,7 +847,7 @@ route coverage; unprovable candidate impact stays explicitly unavailable.
 | `upsert_merge_size` | Composed native PostgreSQL/MySQL/MariaDB/SQL Server/SQLite writers split writes at the minimum requested, resource, and native limit. | Missing native capability or legacy routing refuses before work. |
 | `large_table_threshold` | A retained table-stable exact count selects and binds deferred range topology before mutation. | Strict, incremental, delete, legacy SQLite-to-SQLite, and routes without size authority refuse it. |
 | `runtime_tuning_interval` | The bounded controller changes only at safe write boundaries; decision history is fenced/persisted where the state backend supports it and appears in terminal audit. | Prebound compatibility waves and unsupported routes refuse before mutation. |
-| `history_retention_days` | No Phase Four retention/deletion consumer. | Stage 5 owns retention policy and historical presentation. |
+| `durable operator history` | External orchestration owns retention/deletion; DMTX has no archive. | DMTX provides browser-local recall only. |
 
 Key evidence: `TestStage4CheckpointFrequencyProvenanceAndBound`,
 `TestStage4UpsertMergeAdmissionIntersectsNativeAndResourceCaps`,
@@ -877,9 +877,9 @@ All of A through G, including F2, are closed, each against named tests and the
 armed commands above. Local `go test ./...` passing remains necessary and
 nowhere near sufficient; the armed gate is the claim.
 
-One boundary is deliberate rather than closed: `history_retention_days` has no
-Phase Four consumer because the stage boundary assigns retention to Stage 5. It
-is recorded in F2 as a boundary, not as missing work.
+One boundary is deliberately outside DMTX: durable operator history belongs
+to orchestration software, while DMTX provides browser-local recall only. It is
+recorded as an ownership boundary, not as missing DMTX archive work.
 
 Two known non-goals are also recorded rather than hidden. Cross-engine delete
 reconciliation stays refused, and strict consistency remains admitted only to
@@ -937,6 +937,6 @@ the deterministic tuning contract.
    The remaining matrix must prove target rows, state, leases, fences, strict
    snapshots, cleanup receipts, and final outcome across real interruption—not
    just a clean return from a unit fixture.
-6. **`history_retention_days` is a Stage 5 boundary.** Phase Four records
+6. **Durable operator history belongs to orchestration software; browser-local recall is the DMTX boundary.** Phase Four records
    bounded runtime history and audit facts but does not claim retention-policy
    behavior or historical presentation.

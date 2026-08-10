@@ -44,7 +44,7 @@ completion or weaken Stage 5 parity, redaction, or release checks.
   rationale changes.
 - [ ] Resolve the TUI decision in the normative contract: amend parity to
   CLI/WebUI or implement the TUI. Record the result in the closeout.
-- [ ] Give history_retention_days a safe tested consumer, or remove/defer it
+- [ ] Record that durable operational history belongs to orchestration software; DMTX retains only bounded browser-local command recall (see STAGE5_COMMAND_MATRIX.md)
   through an explicit approved contract change.
 
 ### 2. Authenticated WebUI console
@@ -58,6 +58,7 @@ completion or weaken Stage 5 parity, redaction, or release checks.
   cancel a migration; cancellation is explicit and observable.
 - [ ] Render durable application progress and reconnect over SSE without
   assuming contiguous event sequence numbers.
+- [ ] Emit the same sanitized step/progress/terminal-outcome information during CLI execution; DMTX must not persist a durable log archive because orchestration software owns capture and retention. Current API/console SSE and CLI stderr progress sink are present; focused renderer/wiring tests cover the stream shape and redaction.
 - [ ] Use the authenticated completion API only. Completion remains
   root-confined, symlink-safe, regular-file/directory only, non-leaking on
   failure, and disabled rather than widened when its root cannot resolve.

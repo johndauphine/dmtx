@@ -40,6 +40,12 @@ func TestRunMigratesSQLiteConfiguration(t *testing.T) {
 	if output.String() != "{\"tables\":1,\"rows\":1,\"validated\":true}\n" {
 		t.Fatalf("result = %q", output.String())
 	}
+	if !bytes.Contains(errors.Bytes(), []byte(`"event":"progress"`)) {
+		t.Fatalf("CLI stderr has no live progress record: %q", errors.String())
+	}
+	if bytes.Contains(errors.Bytes(), []byte("password")) || bytes.Contains(errors.Bytes(), []byte("secret")) {
+		t.Fatalf("CLI progress leaked a secret: %q", errors.String())
+	}
 
 	output.Reset()
 	if code := Run([]string{"status", "--state", configPath + ".state.db"}, &output, &errors); code != Success {

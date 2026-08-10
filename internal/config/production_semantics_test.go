@@ -26,9 +26,6 @@ func TestParseAppliesProductionSemanticsDefaults(t *testing.T) {
 	if migration.Deletes.Mode != DeleteModeOff {
 		t.Fatalf("delete mode = %q, want off", migration.Deletes.Mode)
 	}
-	if migration.HistoryRetentionDays != DefaultHistoryRetentionDays {
-		t.Fatalf("history retention = %d", migration.HistoryRetentionDays)
-	}
 	if migration.Tuning != TuningAuto ||
 		!migration.RuntimeTuning ||
 		migration.RuntimeTuningInterval != DefaultRuntimeTuningInterval {
@@ -59,7 +56,6 @@ migration:
     fail_on_estimate_mismatch: false
   deletes:
     mode: reconcile
-  history_retention_days: 0
   tuning: off
   runtime_tuning: false
   runtime_tuning_interval: 9s
@@ -93,9 +89,6 @@ migration:
 		migration.Deletes.Reconcile.BatchSize != DefaultDeleteBatchSize ||
 		!migration.Deletes.Reconcile.RequirePrimaryKey {
 		t.Fatalf("delete policy = %#v", migration.Deletes)
-	}
-	if migration.HistoryRetentionDays != 0 {
-		t.Fatalf("explicit zero history retention defaulted to %d", migration.HistoryRetentionDays)
 	}
 	if migration.Tuning != TuningOff ||
 		migration.RuntimeTuning ||
@@ -376,6 +369,11 @@ func TestParseRejectsUnknownProductionSemanticsFields(t *testing.T) {
 			want: "migration.create_indexes is unsupported",
 		},
 		{
+			name: "removed history retention setting",
+			yaml: "migration:\n  history_retention_days: 7",
+			want: "migration.history_retention_days is unsupported",
+		},
+		{
 			name: "validation typo",
 			yaml: "migration:\n  validation:\n    mod: sample",
 			want: "migration.validation.mod is unsupported",
@@ -567,11 +565,6 @@ func TestParseRejectsExplicitBlankNullAndZeroProductionValues(t *testing.T) {
 			want: "migration.deletes.reconcile.require_primary_key must not be null",
 		},
 		{
-			name: "null history retention",
-			yaml: "migration:\n  history_retention_days: null",
-			want: "migration.history_retention_days must not be null",
-		},
-		{
 			name: "blank tuning mode",
 			yaml: "migration:\n  tuning: ''",
 			want: "migration.tuning must not be blank",
@@ -703,13 +696,7 @@ func TestParseRejectsInvalidProductionSemantics(t *testing.T) {
 			yaml: "runtime_tuning_interval: 0s",
 			want: "runtime_tuning_interval must be positive",
 		},
-		{
-			name: "negative history",
-			yaml: "history_retention_days: -1",
-			want: "history_retention_days must not be negative",
-		},
 	}
-
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
