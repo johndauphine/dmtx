@@ -23,6 +23,9 @@ type Request struct {
 	// ConfigPath. It is an origin selector, never a path or a secret.
 	ProfileName   string `json:"profile_name,omitempty"`
 	ProfileAction string `json:"profile_action,omitempty"`
+	AIAction      string `json:"ai_action,omitempty"`
+	AIRequest     string `json:"ai_request,omitempty"`
+	AITimeout     int    `json:"ai_timeout_seconds,omitempty"`
 
 	DryRun                 bool `json:"dry_run,omitempty"`
 	AcknowledgeDestructive bool `json:"acknowledge_destructive,omitempty"`

@@ -190,6 +190,12 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 			return Request{}, out.failWith(ConfigurationError, "usage: dmtx profile save NAME --config migration.yaml | list | delete NAME"), false
 		}
 		return request, Outcome{}, true
+	case "ai":
+		request, ok := aiArguments(args[1:])
+		if !ok {
+			return Request{}, out.failWith(ConfigurationError, "usage: dmtx ai config-review (--config migration.yaml | --profile NAME) [--request TEXT] [--timeout SECONDS]"), false
+		}
+		return request, Outcome{}, true
 	default:
 		return Request{}, classifyUnhandled(out, args[0]), false
 	}
@@ -366,6 +372,8 @@ func ExecuteWithProgress(
 		return executeProfile(request)
 	case "init-secrets":
 		return executeInitSecrets(request)
+	case "ai":
+		return executeAI(ctx, request)
 	case "run":
 		return executeRun(ctx, request, reporter)
 	case "resume":
