@@ -134,6 +134,8 @@ func TestRequestWireShape(t *testing.T) {
 		Command:                "resume",
 		ConfigPath:             "c",
 		StatePath:              "s",
+		ProfileName:            "p",
+		ProfileAction:          "save",
 		DryRun:                 true,
 		AcknowledgeDestructive: true,
 		Latest:                 true,
@@ -150,6 +152,8 @@ func TestRequestWireShape(t *testing.T) {
 		"dry_run",
 		"force_resume",
 		"latest",
+		"profile_action",
+		"profile_name",
 		"state_path",
 	})
 }

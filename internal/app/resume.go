@@ -15,6 +15,7 @@ import (
 
 type resumeOptions struct {
 	configPath              string
+	profileName             string
 	statePath               string
 	destructiveAcknowledged bool
 	forceResume             bool
@@ -36,7 +37,7 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 		return out.failWith(ConfigurationError, resumeUsage)
 	}
 	configPath, statePath := options.configPath, options.statePath
-	data, err := os.ReadFile(options.configPath)
+	data, _, err := configurationData(request)
 	if err != nil {
 		return out.failWith(FileError, "read configuration: "+err.Error())
 	}
@@ -44,6 +45,11 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
+	auditPath := configPath
+	if auditPath == "" {
+		auditPath = statePath
+	}
+	configPath = auditPath
 	if err := config.ValidateBoundedStage4Settings(cfg.Migration); err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}

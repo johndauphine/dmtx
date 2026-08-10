@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"os"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/migrate"
@@ -13,13 +12,13 @@ import (
 // so the existing CLI tests remain the check that this changed no behaviour.
 func executeValidate(ctx context.Context, request Request) Outcome {
 	out := newOutcome(request.Command)
-	if request.ConfigPath == "" {
+	if request.ConfigPath == "" && request.ProfileName == "" {
 		return out.failWith(
 			ConfigurationError,
-			"usage: dmtx validate --config migration.yaml",
+			"usage: dmtx validate (--config migration.yaml | --profile NAME)",
 		)
 	}
-	data, err := os.ReadFile(request.ConfigPath)
+	data, _, err := configurationData(request)
 	if err != nil {
 		return out.failWith(FileError, "read configuration: "+err.Error())
 	}

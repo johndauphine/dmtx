@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/migrate"
@@ -34,13 +33,13 @@ type Analysis struct {
 // to justify one.
 func executeAnalyze(ctx context.Context, request Request) Outcome {
 	out := newOutcome(request.Command)
-	if request.ConfigPath == "" {
+	if request.ConfigPath == "" && request.ProfileName == "" {
 		return out.failWith(
 			ConfigurationError,
-			"usage: dmtx analyze --config migration.yaml",
+			"usage: dmtx analyze --config migration.yaml | --profile NAME",
 		)
 	}
-	data, err := os.ReadFile(request.ConfigPath)
+	data, origin, err := configurationData(request)
 	if err != nil {
 		return out.failWith(FileError, "read configuration: "+err.Error())
 	}
@@ -61,7 +60,7 @@ func executeAnalyze(ctx context.Context, request Request) Outcome {
 		return out.failWith(ConfigurationError, "analyze: "+err.Error())
 	}
 
-	analysis := Analysis{Path: request.ConfigPath, Tuning: tuning}
+	analysis := Analysis{Path: origin, Tuning: tuning}
 	for _, line := range analysis.lines() {
 		out.out(line)
 	}

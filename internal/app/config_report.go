@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/johndauphine/dmtx/internal/config"
 )
@@ -57,13 +56,13 @@ type MigrationReport struct {
 // committing to a command that touches data.
 func executeConfig(request Request) Outcome {
 	out := newOutcome(request.Command)
-	if request.ConfigPath == "" {
+	if request.ConfigPath == "" && request.ProfileName == "" {
 		return out.failWith(
 			ConfigurationError,
-			"usage: dmtx config --config migration.yaml",
+			"usage: dmtx config --config migration.yaml | --profile NAME",
 		)
 	}
-	data, err := os.ReadFile(request.ConfigPath)
+	data, origin, err := configurationData(request)
 	if err != nil {
 		return out.failWith(FileError, "read configuration: "+err.Error())
 	}
@@ -72,7 +71,7 @@ func executeConfig(request Request) Outcome {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
 
-	report := describeConfig(request.ConfigPath, cfg)
+	report := describeConfig(origin, cfg)
 	for _, line := range report.lines() {
 		out.out(line)
 	}

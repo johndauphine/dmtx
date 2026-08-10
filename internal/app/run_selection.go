@@ -21,16 +21,17 @@ package app
 // SQLite for everything else, so the example shows the thing --state is for:
 // naming a state file the default would not have produced. An example matching
 // the default would demonstrate only what happens without the flag.
-const runUsage = "usage: dmtx run --config migration.yaml " +
+const runUsage = "usage: dmtx run (--config migration.yaml | --profile NAME) " +
 	"[--state migration.state.yaml] [--dry-run] [--acknowledge-destructive]"
 
-const resumeUsage = "usage: dmtx resume --config migration.yaml " +
+const resumeUsage = "usage: dmtx resume (--config migration.yaml | --profile NAME) " +
 	"[--state migration.state.yaml] [--acknowledge-destructive] " +
 	"[--force-resume] [--abandon --abandon-reason TEXT]"
 
 // runOptions is what a run acts on, however it was asked for.
 type runOptions struct {
 	configPath              string
+	profileName             string
 	statePath               string
 	dryRun                  bool
 	destructiveAcknowledged bool
@@ -41,6 +42,7 @@ type runOptions struct {
 func runOptionsFrom(request Request) (runOptions, bool) {
 	return validRunOptions(runOptions{
 		configPath:              request.ConfigPath,
+		profileName:             request.ProfileName,
 		statePath:               request.StatePath,
 		dryRun:                  request.DryRun,
 		destructiveAcknowledged: request.AcknowledgeDestructive,
@@ -54,10 +56,14 @@ func runOptionsFrom(request Request) (runOptions, bool) {
 // parser do not get, and "both remember to derive it" is not a design - it is
 // two chances to forget.
 func validRunOptions(options runOptions) (runOptions, bool) {
-	if options.configPath == "" {
+	if (options.configPath == "") == (options.profileName == "") {
 		return runOptions{}, false
 	}
 	if options.statePath == "" {
+		if options.configPath == "" {
+			// A profile has no safe filesystem-derived state name.
+			return runOptions{}, false
+		}
 		options.statePath = options.configPath + ".state.db"
 	}
 	return options, true

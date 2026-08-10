@@ -315,6 +315,51 @@ func TestJobStatusReportsTheOutcomeWithoutTheStream(t *testing.T) {
 	}
 }
 
+func TestJobListRecoversRunningAndRecentJobs(t *testing.T) {
+	server := newTestServer(t)
+	finishedCommand := newBlockingCommand()
+	server.jobs.execute = finishedCommand.run
+	finished, err := server.jobs.start(app.Request{Command: "status"})
+	if err != nil {
+		t.Fatalf("start finished job: %v", err)
+	}
+	<-finishedCommand.entered
+	close(finishedCommand.release)
+	if !waitFor(func() bool { _, ok := finished.result(); return ok }) {
+		t.Fatal("finished job did not complete")
+	}
+
+	runningCommand := newBlockingCommand()
+	server.jobs.execute = runningCommand.run
+	running, err := server.jobs.start(app.Request{Command: "run"})
+	if err != nil {
+		t.Fatalf("start running job: %v", err)
+	}
+	<-runningCommand.entered
+	t.Cleanup(func() { close(runningCommand.release) })
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
+	request.Header.Set("Authorization", "Bearer "+server.auth.session)
+	server.routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var listed []jobSummary
+	if err := json.Unmarshal(recorder.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("listed %d jobs, want 2", len(listed))
+	}
+	if listed[0].ID != running.ID() || listed[0].State != "running" || listed[0].StartedAt.IsZero() {
+		t.Errorf("newest running job = %+v", listed[0])
+	}
+	if listed[1].ID != finished.ID() || listed[1].State != "finished" || listed[1].StartedAt.IsZero() {
+		t.Errorf("recent finished job = %+v", listed[1])
+	}
+}
+
 // TestUnknownJobIsNotFound pins that an invented id is a 404 rather than a
 // panic or an empty stream that never ends.
 func TestUnknownJobIsNotFound(t *testing.T) {
@@ -345,6 +390,7 @@ func TestJobRoutesRequireAuthentication(t *testing.T) {
 		method string
 		path   string
 	}{
+		{http.MethodGet, "/api/v1/jobs"},
 		{http.MethodPost, "/api/v1/jobs"},
 		{http.MethodGet, "/api/v1/jobs/any"},
 		{http.MethodGet, "/api/v1/jobs/any/events"},

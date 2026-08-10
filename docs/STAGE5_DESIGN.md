@@ -1,5 +1,9 @@
 # Stage 5 design note: operator surfaces
 
+Stage 5 completion is governed by
+[Stage 5 acceptance and closeout checklist](STAGE5_ACCEPTANCE_CHECKLIST.md).
+This document remains the design rationale; it is not itself completion evidence.
+
 Written 2026-08-01, before implementation. This records decisions and their
 reasoning so they are not silently re-litigated or rediscovered. It is a design
 note, not a specification; `docs/RECREATE_DMT.md` §21 remains normative, and
