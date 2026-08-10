@@ -12,18 +12,32 @@ type fakeAtomicFile struct {
 	path     string
 	writeErr error
 	syncErr  error
+	mode     os.FileMode
+	written  bool
+	synced   bool
+	closed   bool
 }
 
-func (file *fakeAtomicFile) Name() string       { return file.path }
-func (*fakeAtomicFile) Chmod(os.FileMode) error { return nil }
+func (file *fakeAtomicFile) Name() string { return file.path }
+func (file *fakeAtomicFile) Chmod(mode os.FileMode) error {
+	file.mode = mode
+	return nil
+}
 func (file *fakeAtomicFile) Write(data []byte) (int, error) {
 	if file.writeErr != nil {
 		return 0, file.writeErr
 	}
+	file.written = true
 	return len(data), nil
 }
-func (file *fakeAtomicFile) Sync() error { return file.syncErr }
-func (*fakeAtomicFile) Close() error     { return nil }
+func (file *fakeAtomicFile) Sync() error {
+	file.synced = true
+	return file.syncErr
+}
+func (file *fakeAtomicFile) Close() error {
+	file.closed = true
+	return nil
+}
 
 func TestAtomicWrite0600WithRenameFailurePreservesDestination(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -117,5 +131,23 @@ func TestAtomicWrite0600DoesNotExposeDataInErrors(t *testing.T) {
 	}
 	if string(err.Error()) == "super-secret" {
 		t.Fatal("secret leaked")
+	}
+}
+
+func TestAtomicWrite0600RestrictsBeforeReplacing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	temporary := &fakeAtomicFile{path: filepath.Join(filepath.Dir(path), ".temporary")}
+	ops := atomicOps{
+		create: func(string, string) (atomicFile, error) { return temporary, nil },
+		rename: func(string, string) error {
+			if temporary.mode != fileMode || !temporary.written || !temporary.synced || !temporary.closed {
+				t.Fatalf("replacement occurred before temporary file was secured: %+v", temporary)
+			}
+			return nil
+		},
+		remove: func(string) error { return nil },
+	}
+	if err := atomicWrite0600With(path, []byte("secret-payload"), ops); err != nil {
+		t.Fatal(err)
 	}
 }

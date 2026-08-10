@@ -24,7 +24,7 @@ var defaultAtomicOps = atomicOps{
 	create: func(directory, pattern string) (atomicFile, error) {
 		return os.CreateTemp(directory, pattern)
 	},
-	rename: os.Rename,
+	rename: replaceSecretFile,
 	remove: os.Remove,
 }
 
