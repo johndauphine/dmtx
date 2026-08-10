@@ -10,7 +10,7 @@ application behavior, the normative contract, or Stage 6 scope.
 At formal closeout, every substantive registered command must be **Supported**
 in the WebUI or **Omitted** with an approved operator-facing rationale. A
 substantive command may not remain **Planned**. An underlying route or handler
-is not support on its own: the command must be discoverable and proven to use
+is not supported on its own: the command must be discoverable and proven to use
 the same application decision path as the CLI/API seam.
 
 ## Registered command freeze
@@ -50,10 +50,10 @@ The matrix is final only when:
 
 1. `ai` and `setup` have recorded final dispositions and no substantive command is Planned.
 2. Browser-local command recall is tested for top-level-only retention, Arrow-Up recall only, blank restoration, bounded storage, and setup/secret exclusion.
-2. Every Supported row has application/API coverage and browser
+3. Every Supported row has application/API coverage and browser
    discoverability/invocation proof through the same decision seam.
-3. Deliberate omissions and deferred export/import appear in
+4. Deliberate omissions and deferred export/import appear in
    `STAGE5_CLOSEOUT_HANDOFF.md` with rationale and residual risk.
-4. Delivery, redaction, CI/race/static-analysis, and armed Stage 4 evidence
+5. Delivery, redaction, CI/race/static-analysis, and armed Stage 4 evidence
    required by `STAGE5_ACCEPTANCE_CHECKLIST.md` are recorded separately. This
    matrix does not waive them.

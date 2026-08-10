@@ -36,11 +36,10 @@ func RenderText(stdout, stderr io.Writer, outcome Outcome) error {
 	return nil
 }
 
-// RenderProgress writes one sanitized live progress record. It is deliberately
-// separate from the final Outcome and is written to the CLI diagnostic stream,
-// leaving stdout machine-readable for the terminal outcome/payload. Progress
-// contains only command/table counters and never credentials, configuration,
-// SQL, or migration data.
+// RenderProgress writes one Progress record to the CLI diagnostic stream.
+// Progress is deliberately limited to non-sensitive command/table counters;
+// this renderer does not inspect arbitrary data, so callers must not populate
+// Progress with secrets. Final outcomes remain machine-readable on stdout.
 func RenderProgress(writer io.Writer, progress Progress) error {
 	record := struct {
 		Event string   `json:"event"`
