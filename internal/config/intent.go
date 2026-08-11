@@ -136,8 +136,6 @@ func sameMigrationField(left, right Migration, field string) bool {
 	case "deletes.reconcile.require_primary_key":
 		return left.Deletes.Reconcile.RequirePrimaryKey ==
 			right.Deletes.Reconcile.RequirePrimaryKey
-	case "history_retention_days":
-		return left.HistoryRetentionDays == right.HistoryRetentionDays
 	case "tuning":
 		return left.Tuning == right.Tuning
 	case "runtime_tuning":
@@ -186,7 +184,6 @@ func isTransferOrTuningField(field string) bool {
 		"max_retries",
 		"strict_consistency",
 		"strict_consistency_scope",
-		"history_retention_days",
 		"tuning",
 		"runtime_tuning",
 		"runtime_tuning_interval":
@@ -263,8 +260,6 @@ func (migration Migration) programmaticFieldSet(field string) bool {
 		return migration.Deletes.Reconcile.BatchSize != 0
 	case "deletes.reconcile.require_primary_key":
 		return migration.Deletes.Reconcile.RequirePrimaryKey
-	case "history_retention_days":
-		return migration.HistoryRetentionDays != 0
 	case "tuning":
 		return migration.Tuning != ""
 	case "runtime_tuning":

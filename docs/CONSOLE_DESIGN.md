@@ -602,7 +602,7 @@ Also absent from both drafts, and the outputs are not small.
   This is the DOM half of the rule whose `aria-live` half is below.
 - The transcript caps its entries, dropping oldest, and truncates a single
   oversized block with a visible marker. `history` returns every run ever
-  recorded as one payload, and `history_retention_days` still has no consumer —
+  recorded as one payload. Browser recall is bounded and local; durable operator history belongs to orchestration software —
   a multi-megabyte text node is a hang, not a scroll.
 - One reconnect can deliver up to `maxRetainedEvents` frames at once, so the
   cap has to survive a burst rather than only steady growth.

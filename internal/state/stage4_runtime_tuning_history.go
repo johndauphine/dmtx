@@ -20,7 +20,7 @@ const Stage4RuntimeTuningHistoryVersion = 1
 // Stage4RuntimeTuningSessionRetention and
 // Stage4RuntimeTuningDecisionRetention bound the full-local history retained
 // for one run/table. They intentionally do not consume
-// history_retention_days, whose Stage 5 consumer remains deferred.
+// durable operational history, whose ownership belongs outside DMTX.
 const (
 	Stage4RuntimeTuningSessionRetention  = 16
 	Stage4RuntimeTuningDecisionRetention = 128

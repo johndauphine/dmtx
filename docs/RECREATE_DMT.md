@@ -310,7 +310,6 @@ migration:
     fail_on_estimate_mismatch: true
   checkpoint_frequency: 10
   max_retries: 3
-  history_retention_days: 30
   tuning: auto
   runtime_tuning: true
   runtime_tuning_interval: 5s

@@ -50,7 +50,6 @@ var migrationYAMLFields = map[string]migrationYAMLKind{
 	"validation":               migrationYAMLValidation,
 	"preflight":                migrationYAMLPreflight,
 	"deletes":                  migrationYAMLDeletes,
-	"history_retention_days":   migrationYAMLInt,
 	"tuning":                   migrationYAMLNonBlank,
 	"runtime_tuning":           migrationYAMLBool,
 	"runtime_tuning_interval":  migrationYAMLDuration,

@@ -54,7 +54,6 @@ type Migration struct {
 	Validation            ValidationPolicy `yaml:"validation"`
 	Preflight             PreflightPolicy  `yaml:"preflight"`
 	Deletes               DeletePolicy     `yaml:"deletes"`
-	HistoryRetentionDays  int              `yaml:"history_retention_days"`
 	Tuning                TuningMode       `yaml:"tuning"`
 	RuntimeTuning         bool             `yaml:"runtime_tuning"`
 	RuntimeTuningInterval time.Duration    `yaml:"runtime_tuning_interval"`
@@ -73,6 +72,7 @@ type Config struct {
 	Source    Endpoint  `yaml:"source"`
 	Target    Endpoint  `yaml:"target"`
 	Migration Migration `yaml:"migration"`
+	AI        *AIConfig `yaml:"ai,omitempty"`
 
 	diagnostics []ConfigDiagnostic
 }
@@ -165,6 +165,9 @@ func Parse(data []byte) (Config, error) {
 	}
 	var value Config
 	if err := yaml.Unmarshal(data, &value); err != nil {
+		return Config{}, fmt.Errorf("parse configuration: %w", err)
+	}
+	if err := value.AI.Validate(); err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
 	value.Migration.parsed = true

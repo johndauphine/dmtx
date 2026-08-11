@@ -197,3 +197,32 @@ func TestNoSurfacePackageImportsMigrateDirectly(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderProgressEmitsSanitizedMachineReadableRecord(t *testing.T) {
+	var output bytes.Buffer
+	progress := Progress{
+		Kind:  ProgressTableFinished,
+		Table: "orders",
+		Rows:  42,
+		Done:  1,
+		Total: 2,
+	}
+	if err := RenderProgress(&output, progress); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Event string   `json:"event"`
+		Data  Progress `json:"progress"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("progress record = %q: %v", output.String(), err)
+	}
+	if decoded.Event != "progress" || !reflect.DeepEqual(decoded.Data, progress) {
+		t.Fatalf("progress record = %#v, want event/progress %#v", decoded, progress)
+	}
+	for _, forbidden := range []string{"password", "secret", "credential", "dsn", "sql"} {
+		if bytes.Contains(output.Bytes(), []byte(forbidden)) {
+			t.Fatalf("progress record contains forbidden token %q: %s", forbidden, output.Bytes())
+		}
+	}
+}

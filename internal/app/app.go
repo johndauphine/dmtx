@@ -40,7 +40,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		_ = RenderText(stdout, stderr, outcome)
 		return outcome.ExitCode
 	}
-	outcome = Execute(context.Background(), request)
+	outcome = ExecuteWithProgress(context.Background(), request, func(progress Progress) {
+		_ = RenderProgress(stderr, progress)
+	})
 	if err := RenderText(stdout, stderr, outcome); err != nil {
 		fmt.Fprintf(stderr, "write output: %v\n", err)
 		return FileError
@@ -186,6 +188,12 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 		request, ok := profileArguments(args[1:])
 		if !ok {
 			return Request{}, out.failWith(ConfigurationError, "usage: dmtx profile save NAME --config migration.yaml | list | delete NAME"), false
+		}
+		return request, Outcome{}, true
+	case "ai":
+		request, ok := aiArguments(args[1:])
+		if !ok {
+			return Request{}, out.failWith(ConfigurationError, "usage: dmtx ai config-review (--config migration.yaml | --profile NAME) [--request TEXT] [--timeout SECONDS]"), false
 		}
 		return request, Outcome{}, true
 	default:
@@ -364,6 +372,8 @@ func ExecuteWithProgress(
 		return executeProfile(request)
 	case "init-secrets":
 		return executeInitSecrets(request)
+	case "ai":
+		return executeAI(ctx, request)
 	case "run":
 		return executeRun(ctx, request, reporter)
 	case "resume":

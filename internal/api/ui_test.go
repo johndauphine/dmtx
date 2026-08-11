@@ -68,6 +68,7 @@ func TestConsoleMaskedSetupInputSkipsCompletionAndHistory(t *testing.T) {
 		"if (setupMasked) clearCompletionOptions()",
 		"if (setupActive && setupMasked) return;",
 		"if (!setupActive || !setupMasked) historyIndex = -1;",
+		"if (!setupActive) remember(typed);",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("console is missing masked setup protection %q", expected)

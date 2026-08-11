@@ -493,9 +493,7 @@ assume they are contiguous.
 
 ## Carried-over obligations
 
-- `history_retention_days` is parsed and validated but has no consumer. Stage 4
-  deliberately deferred it here. See block F2 of
-  `docs/STAGE4_REQUIREMENTS_TESTS.md`.
+- Durable operator history is intentionally outside DMTX; browser-local recall is a console concern. Stage 4 records bounded runtime facts and audit evidence only.
 - §21.2 requires secrets absent from logs, JSON, state, audit, notifications,
   WebUI responses, and AI payloads. Stage 4 has redaction tests, but **every new
   surface is a new leak path**, and Stage 5 adds five or six at once. Treat
