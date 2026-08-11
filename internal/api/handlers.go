@@ -93,16 +93,20 @@ func (server *Server) decodeRequest(
 // that drifts.
 func (server *Server) commands(writer http.ResponseWriter, request *http.Request) {
 	type command struct {
-		Name    string   `json:"name"`
-		Aliases []string `json:"aliases,omitempty"`
-		WebUI   string   `json:"webui"`
+		Name        string   `json:"name"`
+		Aliases     []string `json:"aliases,omitempty"`
+		Description string   `json:"description"`
+		Category    string   `json:"category"`
+		WebUI       string   `json:"webui"`
 	}
 	listed := make([]command, 0, len(contract.Commands))
 	for _, registered := range contract.Commands {
 		listed = append(listed, command{
-			Name:    registered.Name,
-			Aliases: registered.Aliases,
-			WebUI:   string(registered.WebUI),
+			Name:        registered.Name,
+			Aliases:     registered.Aliases,
+			Description: registered.Description,
+			Category:    registered.Category,
+			WebUI:       string(registered.WebUI),
 		})
 	}
 	writeJSON(writer, http.StatusOK, listed)
