@@ -68,10 +68,11 @@ var ErrInsecureDirectory = errors.New("secrets directory permissions are too ope
 
 // Config is what the file holds.
 //
-// Only Encryption is read by anything today, and only once profiles exist. The
-// remaining sections are described in the template as not yet read, because a
-// file that lists capabilities dmtx does not have is a file that promises them.
+// Encryption and AI provider settings are live. Future sections remain
+// explicitly commented in the template until a consumer exists, because a file
+// that lists capabilities dmtx does not have is a file that promises them.
 type Config struct {
+	AI AIConfig `yaml:"ai,omitempty"`
 	// Encryption holds the key profiles are sealed with. Losing it makes every
 	// stored profile unrecoverable, which is why nothing here ever rewrites the
 	// file wholesale.
@@ -242,20 +243,30 @@ const Template = `# dmtx secrets.
 # It does not protect the file from somebody holding the disk. For that you
 # want full-disk encryption; these permissions are not a substitute for it.
 #
-# NOTHING IN DMTX READS ANY OF THIS YET. The sections below are here so the
-# file and its protections exist before anything depends on them. Each says
-# what will read it, and when.
+# The encryption and AI sections below are live. Future sections stay
+# commented until DMTX has a consumer for them.
 
-# Read by: profile storage, once profiles exist.
+# Read by: profile storage.
 # Sealing key for stored connection profiles. Losing it makes every stored
 # profile unrecoverable, so back it up somewhere you would back up a password.
 # Leave it empty and dmtx will generate one the first time it seals a profile.
 encryption:
   master_key: ""
 
-# Read by: nothing yet. AI advisories are not built.
-# ai:
-#   api_key: ""
+# Read by: dmtx ai config-review.
+# Provider credentials belong only in this owner-only file, never migration
+# YAML. Model IDs are ordinary configuration and may be changed freely.
+ai:
+  default_provider: openai
+  providers:
+    openai:
+      protocol: openai
+      base_url: https://api.openai.com
+      api_key: ""
+      model: gpt-5.6-luna
+      max_tokens: 2048
+      max_requests: 1
+      timeout_seconds: 30
 
 # Read by: nothing yet. Notifications are not built.
 # notifications:

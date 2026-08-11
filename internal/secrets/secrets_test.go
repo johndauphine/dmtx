@@ -9,63 +9,29 @@ import (
 	"testing"
 )
 
-// TestTheTemplateSaysNothingReadsItYet is the condition on shipping this store
-// before its consumers exist.
-//
-// A file listing capabilities dmtx does not have promises them. An operator who
-// put an API key in an "ai" section expecting it to be used would be wrong in a
-// way that costs them their time to discover, so each section says what will
-// read it and when.
-func TestTheTemplateSaysNothingReadsItYet(t *testing.T) {
-	if !strings.Contains(Template, "NOTHING IN DMTX READS ANY OF THIS YET") {
-		t.Error("the template does not say that nothing reads it")
+// TestTheTemplateDistinguishesLiveAndFutureSections keeps the generated file
+// honest about which configuration DMTX consumes.
+func TestTheTemplateDistinguishesLiveAndFutureSections(t *testing.T) {
+	if strings.Contains(Template, "AI advisories are not built") ||
+		strings.Contains(Template, "NOTHING IN DMTX READS ANY OF THIS YET") {
+		t.Fatal("the template still describes live AI configuration as unbuilt")
 	}
-	// Each section is checked against the line above it, not against the
-	// template as a whole. Looking for "Read by: nothing yet" anywhere passed
-	// while only one section carried it - a single note vouching for every
-	// section, which is not what it says.
+	if !strings.Contains(Template, "Read by: dmtx ai config-review.") {
+		t.Fatal("the template does not identify the AI consumer")
+	}
+	if !strings.Contains(Template, "api_key: \"\"") {
+		t.Fatal("the template does not provide an empty protected credential field")
+	}
 	lines := strings.Split(Template, "\n")
-	for _, section := range []string{"ai:", "notifications:"} {
-		found := false
-		for index, line := range lines {
-			if !strings.Contains(line, section) {
-				continue
-			}
-			found = true
-			if index == 0 || !strings.Contains(lines[index-1], "Read by:") {
-				above := ""
-				if index > 0 {
-					above = lines[index-1]
-				}
-				t.Errorf(
-					"the section %q is not preceded by a line saying what reads "+
-						"it; the line above is %q",
-					section, above,
-				)
-			}
-		}
-		if !found {
-			t.Errorf("the template no longer mentions %q; this test is stale", section)
-		}
-	}
-
-	// Every unbuilt section stays commented, so a parse cannot silently accept
-	// a key nothing will use. Checked by walking the lines rather than naming
-	// the sections twice, because the list I named by hand omitted
-	// "notifications:" and would not have noticed it going live.
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") || trimmed == "" {
+	for index, line := range lines {
+		if !strings.Contains(line, "notifications:") {
 			continue
 		}
-		if !strings.HasPrefix(trimmed, "encryption:") &&
-			!strings.HasPrefix(trimmed, "master_key:") {
-			t.Errorf(
-				"an unread section is uncommented and looks live: %q\n"+
-					"only encryption is real; everything else must stay commented "+
-					"until something reads it",
-				line,
-			)
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			t.Fatal("the unbuilt notifications section is active")
+		}
+		if index == 0 || !strings.Contains(lines[index-1], "Read by: nothing yet") {
+			t.Fatal("the unbuilt notifications section lacks its consumer status")
 		}
 	}
 }
@@ -252,6 +218,17 @@ func TestLoadReadsWhatCreateWrote(t *testing.T) {
 	// generated when a profile is first sealed.
 	if loaded.Encryption.MasterKey != "" {
 		t.Errorf("the template ships a master key: %q", loaded.Encryption.MasterKey)
+	}
+	provider := loaded.AI.Providers["openai"]
+	if loaded.AI.DefaultProvider != "openai" || provider == nil {
+		t.Fatalf("the template does not load its OpenAI provider: %+v", loaded.AI)
+	}
+	if provider.APIKey != "" {
+		t.Fatal("the template ships an API credential")
+	}
+	if provider.Protocol != "openai" || provider.Model != "gpt-5.6-luna" ||
+		provider.MaxRequests != 1 || provider.TimeoutSeconds != 30 {
+		t.Fatalf("unexpected OpenAI template settings: %+v", provider)
 	}
 }
 
