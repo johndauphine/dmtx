@@ -152,6 +152,13 @@ func (server *Server) parse(writer http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
+	// A browser console is conventionally slash-first while the command line
+	// receives its command name without that decoration. Normalise only the
+	// first word: later words are arguments, and stripping a slash from one of
+	// those would turn an absolute path into a different path.
+	if len(args) > 0 && strings.HasPrefix(args[0], "/") {
+		args[0] = strings.TrimPrefix(args[0], "/")
+	}
 
 	parsed, outcome, dispatched := app.ParseRequest(args)
 	if !dispatched {

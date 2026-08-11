@@ -99,7 +99,8 @@ func Valid() bool { return valid(Commands) }
 func valid(commands []Command) bool {
 	seen := map[string]bool{}
 	for _, command := range commands {
-		if command.Name == "" || command.TUI == "" || command.WebUI == "" {
+		if command.Name == "" || command.Description == "" || command.Category == "" ||
+			command.TUI == "" || command.WebUI == "" {
 			return false
 		}
 		// A command omitted from both surfaces has to say why, or its refusal

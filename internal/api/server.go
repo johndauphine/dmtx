@@ -220,6 +220,12 @@ func (server *Server) CompletionRoot() string {
 func (server *Server) ExitedIdle() bool { return server.exitedIdle.Load() }
 
 func (server *Server) routes() http.Handler {
+	return server.activity.track(server.routeMux())
+}
+
+// routeMux keeps the patterns available to the shell asset test. routes still
+// applies activity tracking once around this same mux for the served handler.
+func (server *Server) routeMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	// The login route is deliberately unauthenticated: it is where a request
 	// becomes authenticated. It accepts only the launch token.
@@ -276,10 +282,13 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/v1/jobs/{id}/cancel", server.auth.require(
 		http.HandlerFunc(server.cancelJob),
 	))
+	mux.Handle("GET /static/", server.auth.require(
+		http.HandlerFunc(server.consoleAsset),
+	))
 	mux.Handle("GET /", server.auth.require(
 		http.HandlerFunc(server.console),
 	))
-	return server.activity.track(mux)
+	return mux
 }
 
 // Serve runs until ctx is cancelled, then shuts down gracefully so an in-flight

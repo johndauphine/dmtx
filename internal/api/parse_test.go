@@ -218,6 +218,70 @@ func TestParseAgreesWithTheCommandLine(t *testing.T) {
 	}
 }
 
+// TestParseNormalizesTheConsoleSlashOnlyAtTheCommandPosition pins the browser
+// convention without teaching the application parser a second grammar. Paths
+// are arguments, so changing their leading slash would change their meaning.
+func TestParseNormalizesTheConsoleSlashOnlyAtTheCommandPosition(t *testing.T) {
+	server := newTestServer(t)
+
+	for _, testCase := range []struct {
+		name       string
+		line       string
+		dispatched bool
+		command    string
+		configPath string
+		contains   string
+	}{
+		{
+			name:       "slash status",
+			line:       "/status --state state.db",
+			dispatched: true,
+			command:    "status",
+		},
+		{
+			name:       "slash alias canonicalizes",
+			line:       "/health-check --config migration.yaml",
+			dispatched: true,
+			command:    "preflight",
+			configPath: "migration.yaml",
+		},
+		{
+			name:       "absolute argument is unchanged",
+			line:       "/validate --config /project/migration.yaml",
+			dispatched: true,
+			command:    "validate",
+			configPath: "/project/migration.yaml",
+		},
+		{
+			name:     "two slashes are not silently accepted",
+			line:     "//status --state state.db",
+			contains: "/status",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := parseLine(t, server, testCase.line)
+			if body.Dispatched != testCase.dispatched {
+				t.Fatalf("dispatched = %t, want %t: %+v", body.Dispatched, testCase.dispatched, body)
+			}
+			if body.Request.Command != testCase.command {
+				t.Errorf("command = %q, want %q", body.Request.Command, testCase.command)
+			}
+			if body.Request.ConfigPath != testCase.configPath {
+				t.Errorf("config path = %q, want %q", body.Request.ConfigPath, testCase.configPath)
+			}
+			if testCase.contains != "" {
+				messages := make([]string, 0, len(body.Outcome.Messages))
+				for _, message := range body.Outcome.Messages {
+					messages = append(messages, message.Text)
+				}
+				if got := strings.Join(messages, "\n"); !strings.Contains(got, testCase.contains) {
+					t.Errorf("outcome %q does not contain %q", got, testCase.contains)
+				}
+			}
+		})
+	}
+}
+
 // TestParseAnswersTheLinesThatAnswerThemselves covers dispatched=false.
 //
 // version, help and an unknown command have no orchestration to perform. They

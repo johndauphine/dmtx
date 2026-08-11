@@ -125,6 +125,35 @@ func TestSessionCookieAuthenticatesSubsequentRequests(t *testing.T) {
 	}
 }
 
+// TestCommandsExposePaletteMetadata pins the fields the console needs to
+// describe and group every registry command instead of carrying a second list.
+func TestCommandsExposePaletteMetadata(t *testing.T) {
+	server := newTestServer(t)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/commands", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: server.auth.session})
+	recorder := httptest.NewRecorder()
+	server.routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("commands returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var commands []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Category    string `json:"category"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&commands); err != nil {
+		t.Fatalf("decode commands: %v", err)
+	}
+	if len(commands) == 0 {
+		t.Fatal("commands response is empty")
+	}
+	for _, command := range commands {
+		if command.Name == "" || command.Description == "" || command.Category == "" {
+			t.Errorf("incomplete palette metadata: %+v", command)
+		}
+	}
+}
+
 // TestExecuteRejectsUnknownFields pins that a client cannot believe it asked
 // for something the server ignored. A caller sending force_resume to a server
 // that does not know the field must be told, not silently obeyed differently.
