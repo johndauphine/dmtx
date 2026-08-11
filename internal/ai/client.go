@@ -183,6 +183,9 @@ func validateEndpoint(raw string, local bool) error {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return errors.New("AI endpoint must be an absolute URL")
 	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return errors.New("AI endpoint must not include userinfo, query, or fragment")
+	}
 	if u.Scheme != "https" && !(local && u.Scheme == "http") {
 		return errors.New("non-loopback AI endpoints require HTTPS")
 	}
@@ -326,7 +329,11 @@ func (client *Client) request(prompt string) ([]byte, string, map[string]string,
 		}
 		body, err := json.Marshal(requestFields)
 		endpoint := strings.TrimRight(client.provider.BaseURL, "/")
-		if !strings.HasSuffix(endpoint, "/chat/completions") {
+		switch {
+		case strings.HasSuffix(endpoint, "/chat/completions"):
+		case strings.HasSuffix(endpoint, "/v1"):
+			endpoint += "/chat/completions"
+		default:
 			endpoint += "/v1/chat/completions"
 		}
 		headers := map[string]string{}

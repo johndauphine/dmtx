@@ -99,6 +99,26 @@ func TestOpenAIUsesCompletionTokensAndBearerAuth(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleBaseURLWithV1DoesNotDuplicateVersionPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %s", request.URL.Path)
+		}
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"ok\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(&config.AIConfig{
+		Provider: "lmstudio", BaseURL: server.URL + "/v1", Model: "local-model",
+	}, secrets.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Generate(context.Background(), "facts"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGoogleUsesGoogleProtocolAndRedactsCredentialFromURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1beta/models/gemini-test:generateContent" {
@@ -127,6 +147,24 @@ func TestRemoteHTTPAndPlaintextCredentialAreRefused(t *testing.T) {
 	}
 	if _, err := NewClient(&config.AIConfig{Provider: "openai", APIKey: "plain-secret"}, secrets.Config{}); err == nil || strings.Contains(err.Error(), "plain-secret") {
 		t.Fatalf("plaintext credential was not safely refused: %v", err)
+	}
+}
+
+func TestEndpointRejectsUserinfoQueryAndFragment(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://user:password@example.com",
+		"https://example.com?token=secret",
+		"https://example.com#fragment",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			_, err := NewClient(&config.AIConfig{Provider: "custom", BaseURL: endpoint}, secrets.Config{})
+			if err == nil {
+				t.Fatal("expected unsafe endpoint to be rejected")
+			}
+			if strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("endpoint error leaked URL content: %v", err)
+			}
+		})
 	}
 }
 

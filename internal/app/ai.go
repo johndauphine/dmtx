@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -68,13 +69,17 @@ func executeAIWith(ctx context.Context, request Request, load func() (secrets.Co
 	}
 	global, err := load()
 	if err != nil {
-		if errors.Is(err, secrets.ErrInsecurePermissions) || errors.Is(err, secrets.ErrInsecureDirectory) {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			payload := aiAdvisoryPayload{Status: "unavailable", Error: "no protected AI provider configured"}
+			_ = out.setPayload(PayloadAIAdvisory, payload)
+			out.out("AI advisory unavailable: no protected provider configured")
+			return out.done(Success)
+		case errors.Is(err, secrets.ErrInsecurePermissions), errors.Is(err, secrets.ErrInsecureDirectory):
 			return out.failWith(FileError, "AI secrets are not protected")
+		default:
+			return out.failWith(FileError, "AI secrets could not be loaded")
 		}
-		payload := aiAdvisoryPayload{Status: "unavailable", Error: "no protected AI provider configured"}
-		_ = out.setPayload(PayloadAIAdvisory, payload)
-		out.out("AI advisory unavailable: no protected provider configured")
-		return out.done(Success)
 	}
 	client, err := ai.NewClient(cfg.AI, global)
 	if err != nil {

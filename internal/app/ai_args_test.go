@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,6 +178,52 @@ func TestExecuteAIWithMockedInvalidResponseSurfacesSafeClass(t *testing.T) {
 	}
 	if !strings.Contains(saidBy(outcome), "response schema_validation") {
 		t.Fatalf("safe parse class was not surfaced: %v", outcome.Messages)
+	}
+}
+
+func TestExecuteAIMissingSecretsIsAdvisoryUnavailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "migration.yaml")
+	configuration := "source:\n  type: sqlite\n  database: source.db\ntarget:\n  type: sqlite\n  database: target.db\n"
+	if err := os.WriteFile(path, []byte(configuration), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome := executeAIWith(
+		context.Background(),
+		Request{Command: "ai", AIAction: "config-review", ConfigPath: path},
+		func() (secrets.Config, error) { return secrets.Config{}, os.ErrNotExist },
+	)
+	if outcome.ExitCode != Success || !strings.Contains(saidBy(outcome), "no protected provider configured") {
+		t.Fatalf("missing secrets outcome = code %d, messages %v", outcome.ExitCode, outcome.Messages)
+	}
+}
+
+func TestExecuteAISecretsLoadFailureFailsWithoutLeakingError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "migration.yaml")
+	configuration := "source:\n  type: sqlite\n  database: source.db\ntarget:\n  type: sqlite\n  database: target.db\n"
+	if err := os.WriteFile(path, []byte(configuration), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, loadErr := range []error{
+		errors.New("parse secrets: api-key-sentinel"),
+		os.ErrPermission,
+	} {
+		outcome := executeAIWith(
+			context.Background(),
+			Request{Command: "ai", AIAction: "config-review", ConfigPath: path},
+			func() (secrets.Config, error) { return secrets.Config{}, loadErr },
+		)
+		if outcome.ExitCode != FileError {
+			t.Fatalf("secrets load error %v returned code %d", loadErr, outcome.ExitCode)
+		}
+		message := saidBy(outcome)
+		if !strings.Contains(message, "AI secrets could not be loaded") {
+			t.Fatalf("secrets load error was not surfaced safely: %v", outcome.Messages)
+		}
+		if strings.Contains(message, "api-key-sentinel") || strings.Contains(message, "permission denied") {
+			t.Fatalf("secrets load error leaked details: %v", outcome.Messages)
+		}
 	}
 }
 
