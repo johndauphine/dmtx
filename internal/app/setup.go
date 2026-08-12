@@ -65,6 +65,20 @@ func NewSetup(configPath string) *Setup {
 	return &Setup{configPath: configPath}
 }
 
+// newSetupFromConfig starts the SQLite wizard from an encrypted profile's
+// already-parsed configuration. The profile is input only: confirmation writes
+// a new owner-only YAML file and never silently mutates the encrypted profile.
+func newSetupFromConfig(configPath string, cfg config.Config) (*Setup, error) {
+	if cfg.Source.Type != "sqlite" || cfg.Target.Type != "sqlite" {
+		return nil, newSetupStartError("saved profile is not a SQLite-to-SQLite configuration")
+	}
+	setup := NewSetup(configPath)
+	setup.sourcePath = cfg.Source.Database
+	setup.targetPath = cfg.Target.Database
+	setup.targetMode = cfg.Migration.TargetMode
+	return setup, nil
+}
+
 // Prompt reports the current setup question without advancing it.
 func (setup *Setup) Prompt() SetupPrompt {
 	setup.mu.Lock()
@@ -87,7 +101,10 @@ func (setup *Setup) Input(input string) SetupPrompt {
 	switch setup.step {
 	case setupSource:
 		if value == "" {
-			value = "source.db"
+			value = setup.sourcePath
+			if value == "" {
+				value = "source.db"
+			}
 		}
 		if err := validateSQLiteSource(value); err != nil {
 			setup.errorText = err.Error()
@@ -97,13 +114,19 @@ func (setup *Setup) Input(input string) SetupPrompt {
 		setup.step = setupTarget
 	case setupTarget:
 		if value == "" {
-			value = "target.db"
+			value = setup.targetPath
+			if value == "" {
+				value = "target.db"
+			}
 		}
 		setup.targetPath = value
 		setup.step = setupTargetMode
 	case setupTargetMode:
 		if value == "" {
-			value = "drop_recreate"
+			value = setup.targetMode
+			if value == "" {
+				value = "drop_recreate"
+			}
 		}
 		if value != "drop_recreate" && value != "upsert" {
 			setup.errorText = "target mode must be drop_recreate or upsert"
@@ -158,11 +181,20 @@ func (setup *Setup) prompt() SetupPrompt {
 	prompt := SetupPrompt{Error: setup.errorText, ConfigPath: setup.configPath}
 	switch setup.step {
 	case setupSource:
-		prompt.Step, prompt.Text, prompt.Default = "source_database", "Source SQLite database path", "source.db"
+		prompt.Step, prompt.Text, prompt.Default = "source_database", "Source SQLite database path", setup.sourcePath
+		if prompt.Default == "" {
+			prompt.Default = "source.db"
+		}
 	case setupTarget:
-		prompt.Step, prompt.Text, prompt.Default = "target_database", "Target SQLite database path", "target.db"
+		prompt.Step, prompt.Text, prompt.Default = "target_database", "Target SQLite database path", setup.targetPath
+		if prompt.Default == "" {
+			prompt.Default = "target.db"
+		}
 	case setupTargetMode:
-		prompt.Step, prompt.Text, prompt.Default = "target_mode", "Target mode", "drop_recreate"
+		prompt.Step, prompt.Text, prompt.Default = "target_mode", "Target mode", setup.targetMode
+		if prompt.Default == "" {
+			prompt.Default = "drop_recreate"
+		}
 		prompt.Choices = []string{"drop_recreate", "upsert"}
 	case setupConfigPath:
 		prompt.Step, prompt.Text, prompt.Default = "config_path", "Configuration file path", setup.configPath

@@ -30,15 +30,33 @@ type Request struct {
 	DryRun                 bool `json:"dry_run,omitempty"`
 	AcknowledgeDestructive bool `json:"acknowledge_destructive,omitempty"`
 
+	// Invocation overrides mirror DMT's interactive flags. They are applied
+	// only to the in-memory configuration used by this request; a slash command
+	// must not silently rewrite the selected config file or encrypted profile.
+	SourceSchema  string `json:"source_schema,omitempty"`
+	TargetSchema  string `json:"target_schema,omitempty"`
+	Workers       int    `json:"workers,omitempty"`
+	SkipPreflight string `json:"skip_preflight,omitempty"`
+
+	// Detailed asks status to include the durable table checkpoints for the
+	// selected run. It is deliberately a request property rather than a UI
+	// concern: the same status request must return the same facts everywhere.
+	Detailed bool `json:"detailed,omitempty"`
+
+	// OutputPath is used by an explicit profile export. The profile store stays
+	// encrypted at rest; export is the operator's deliberate request to write a
+	// protected plaintext configuration.
+	OutputPath string `json:"output_path,omitempty"`
+
 	// Latest distinguishes status from history, which share an implementation.
 	Latest bool `json:"latest,omitempty"`
 
 	// Force replaces a file init would otherwise refuse to overwrite.
 	Force bool `json:"force,omitempty"`
 
-	// RunID names a particular run for diagnose. Empty asks for the most
-	// recent run that did not succeed, which is what an operator means when
-	// they type diagnose after something went wrong.
+	// RunID names a particular run for diagnose or history. For diagnose,
+	// empty asks for the most recent run that did not succeed, which is what an
+	// operator means when they type diagnose after something went wrong.
 	RunID string `json:"run_id,omitempty"`
 
 	// Resume-only. Abandon and AbandonReason travel together: abandoning
@@ -106,16 +124,18 @@ type Payload struct {
 
 // Payload kinds, one per structured shape a command can produce.
 const (
-	PayloadPlan            = "plan"
-	PayloadResult          = "result"
-	PayloadPartialResult   = "partial_result"
-	PayloadRun             = "run"
-	PayloadRuns            = "runs"
-	PayloadPreflightReport = "preflight_report"
-	PayloadResumeResponse  = "resume_response"
-	PayloadConfig          = "config"
-	PayloadDiagnosis       = "diagnosis"
-	PayloadAnalysis        = "analysis"
+	PayloadPlan             = "plan"
+	PayloadResult           = "result"
+	PayloadValidationResult = "validation_result"
+	PayloadPartialResult    = "partial_result"
+	PayloadRun              = "run"
+	PayloadRuns             = "runs"
+	PayloadPreflightReport  = "preflight_report"
+	PayloadResumeResponse   = "resume_response"
+	PayloadConfig           = "config"
+	PayloadDiagnosis        = "diagnosis"
+	PayloadAnalysis         = "analysis"
+	PayloadStatusDetail     = "status_detail"
 )
 
 // outcomeBuilder accumulates messages while an operation runs.

@@ -10,14 +10,19 @@ import (
 // same run the caller is asking about.
 
 func resumeOptionsFrom(request Request) (resumeOptions, bool) {
+	configPath := request.ConfigPath
+	if configPath == "" && request.ProfileName == "" {
+		configPath = "config.yaml"
+	}
 	options := resumeOptions{
-		configPath:              request.ConfigPath,
+		configPath:              configPath,
 		profileName:             request.ProfileName,
 		statePath:               request.StatePath,
 		destructiveAcknowledged: request.AcknowledgeDestructive,
 		forceResume:             request.ForceResume,
 		abandon:                 request.Abandon,
 		abandonReason:           request.AbandonReason,
+		skipPreflight:           request.SkipPreflight,
 	}
 	return validResumeOptions(options)
 }
@@ -37,56 +42,6 @@ func validResumeOptions(options resumeOptions) (resumeOptions, bool) {
 		options.statePath = options.configPath + ".state.db"
 	}
 	return options, true
-}
-
-func resumeArguments(args []string) (resumeOptions, bool) {
-	var options resumeOptions
-	for index := 0; index < len(args); index++ {
-		switch args[index] {
-		case "--config":
-			if index+1 >= len(args) || options.configPath != "" {
-				return resumeOptions{}, false
-			}
-			options.configPath = args[index+1]
-			index++
-		case "--profile":
-			if index+1 >= len(args) || options.profileName != "" {
-				return resumeOptions{}, false
-			}
-			options.profileName = args[index+1]
-			index++
-		case "--state":
-			if index+1 >= len(args) || options.statePath != "" {
-				return resumeOptions{}, false
-			}
-			options.statePath = args[index+1]
-			index++
-		case "--acknowledge-destructive":
-			if options.destructiveAcknowledged {
-				return resumeOptions{}, false
-			}
-			options.destructiveAcknowledged = true
-		case "--force-resume":
-			if options.forceResume {
-				return resumeOptions{}, false
-			}
-			options.forceResume = true
-		case "--abandon":
-			if options.abandon {
-				return resumeOptions{}, false
-			}
-			options.abandon = true
-		case "--abandon-reason":
-			if index+1 >= len(args) || options.abandonReason != "" {
-				return resumeOptions{}, false
-			}
-			options.abandonReason = args[index+1]
-			index++
-		default:
-			return resumeOptions{}, false
-		}
-	}
-	return validResumeOptions(options)
 }
 
 func latestRunForTarget(

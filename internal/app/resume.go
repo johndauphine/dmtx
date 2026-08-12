@@ -21,6 +21,7 @@ type resumeOptions struct {
 	forceResume             bool
 	abandon                 bool
 	abandonReason           string
+	skipPreflight           string
 }
 
 func executeResume(ctx context.Context, request Request, reporter *progressReporter) Outcome {
@@ -43,6 +44,9 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 	}
 	cfg, err := config.Parse(data)
 	if err != nil {
+		return out.failWith(ConfigurationError, "configuration: "+err.Error())
+	}
+	if err := applyInvocationOverrides(&cfg, request); err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
 	auditPath := configPath

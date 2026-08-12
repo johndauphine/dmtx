@@ -1,0 +1,114 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: #101215;
+  color: #e5e7eb;
+}
+
+body {
+  margin: 0;
+  min-width: 20rem;
+}
+
+.console-shell {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 72rem;
+  min-height: 100vh;
+  padding: 1.25rem;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+#command-summary,
+#console-status {
+  color: #a8b0bd;
+  display: block;
+  font-size: 0.875rem;
+  margin: 0.5rem 0 1rem;
+}
+
+#transcript {
+  border: 1px solid #30363d;
+  border-radius: 0.4rem;
+  min-height: 16rem;
+  overflow-wrap: anywhere;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+}
+
+.transcript-line {
+  margin: 0 0 0.75rem;
+  white-space: pre-wrap;
+}
+
+.transcript-command { color: #8bcbff; }
+.transcript-error { color: #ffaaa5; }
+
+#command-form { margin-top: 1rem; }
+
+.command-entry {
+  align-items: center;
+  border: 1px solid #4c5868;
+  border-radius: 0.35rem;
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.3rem 0;
+  padding: 0.45rem 0.65rem;
+}
+
+#line {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+  outline: none;
+  width: 100%;
+}
+
+#suggestions {
+  background: #181c21;
+  border: 1px solid #4c5868;
+  border-radius: 0.35rem;
+  margin-bottom: 0.5rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.suggestion {
+  cursor: pointer;
+  padding: 0.55rem 0.7rem;
+}
+
+.suggestion[aria-selected="true"] { background: #253448; }
+.suggestion[aria-disabled="true"] { color: #8a93a1; cursor: not-allowed; }
+.suggestion-name { color: #8bcbff; }
+.suggestion-meta { color: #a8b0bd; display: block; font-size: 0.8rem; margin-top: 0.2rem; }
+.suggestion-disposition { text-transform: capitalize; }
+
+button {
+  background: #253448;
+  border: 1px solid #52667d;
+  border-radius: 0.3rem;
+  color: inherit;
+  font: inherit;
+  margin-right: 0.4rem;
+  padding: 0.4rem 0.7rem;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+button:focus-visible,
+#line:focus-visible { outline: 2px solid #8bcbff; outline-offset: 2px; }
+
+@media (max-width: 36rem) {
+  .console-shell { padding: 0.75rem; }
+  #transcript { min-height: 12rem; }
+}

@@ -34,6 +34,9 @@ func executePreflightWithProbe(
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
+	if err := applyInvocationOverrides(&cfg, request); err != nil {
+		return out.failWith(ConfigurationError, "configuration: "+err.Error())
+	}
 	if err := migrate.ValidateStage4ComposedConfiguration(cfg); err != nil {
 		// A refused configuration still produces a report: the operator asked
 		// what would happen, and "here is why not" is the answer.

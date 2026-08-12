@@ -24,6 +24,26 @@ type SetupFlow interface {
 	Input(string) SetupPrompt
 }
 
+type setupStartError struct{ message string }
+
+func (err *setupStartError) Error() string { return err.message }
+
+func newSetupStartError(message string) error {
+	return &setupStartError{message: message}
+}
+
+// SetupStartErrorMessage returns only errors deliberately classified as safe
+// for an authenticated operator. Storage, filesystem, parser, and driver errors
+// are otherwise collapsed so a future internal error cannot accidentally leak
+// paths or protected configuration details through the setup API.
+func SetupStartErrorMessage(err error) string {
+	var safe *setupStartError
+	if errors.As(err, &safe) {
+		return safe.Error()
+	}
+	return "could not start setup"
+}
+
 // NewSetupForEngine selects a supported setup workflow in the application.
 func NewSetupForEngine(configPath, engineName string) (SetupFlow, error) {
 	switch strings.ToLower(strings.TrimSpace(engineName)) {
@@ -32,7 +52,57 @@ func NewSetupForEngine(configPath, engineName string) (SetupFlow, error) {
 	case "postgres", "postgresql":
 		return NewPostgresSetup(configPath), nil
 	default:
-		return nil, errors.New("unsupported setup engine")
+		return nil, newSetupStartError("unsupported setup engine; choose sqlite or postgres")
+	}
+}
+
+// NewSetupForProfile loads a sealed profile as setup input. Confirmation always
+// creates a separate YAML configuration; the encrypted profile is never
+// changed implicitly. PostgreSQL passwords are intentionally not carried into
+// the setup prompts or output secret files.
+func NewSetupForProfile(profileName, configPath, engineName string) (SetupFlow, error) {
+	if strings.TrimSpace(profileName) == "" {
+		return nil, newSetupStartError("profile name is required")
+	}
+	data, _, err := configurationData(Request{ProfileName: profileName})
+	if err != nil {
+		return nil, profileSetupLoadError(err)
+	}
+	return newSetupForProfileData(profileName, configPath, engineName, data)
+}
+
+func profileSetupLoadError(err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return newSetupStartError("saved profile was not found")
+	}
+	return newSetupStartError("profile storage is unavailable; initialise secrets and save the profile first")
+}
+
+// newSetupForProfileData keeps profile decryption at the boundary while making
+// the profile-seeded setup policy independently testable without writing to a
+// caller's real protected profile directory.
+func newSetupForProfileData(profileName, configPath, engineName string, data []byte) (SetupFlow, error) {
+	if strings.TrimSpace(profileName) == "" {
+		return nil, newSetupStartError("profile name is required")
+	}
+	cfg, err := config.Parse(data)
+	if err != nil {
+		return nil, newSetupStartError("saved profile contains an invalid configuration")
+	}
+	if strings.TrimSpace(configPath) == "" {
+		configPath = profileName + ".yaml"
+	}
+	engine := strings.ToLower(strings.TrimSpace(engineName))
+	if engine == "" {
+		engine = cfg.Source.Type
+	}
+	switch engine {
+	case "sqlite":
+		return newSetupFromConfig(configPath, cfg)
+	case "postgres", "postgresql":
+		return newPostgresSetupFromConfig(configPath, cfg)
+	default:
+		return nil, newSetupStartError("saved profile uses an unsupported setup engine")
 	}
 }
 
@@ -88,6 +158,20 @@ func newPostgresSetup(configPath string, verify postgresSetupVerifier) *Postgres
 	return &PostgresSetup{path: configPath, verify: verify, timeout: postgresSetupVerificationTimeout}
 }
 
+// newPostgresSetupFromConfig seeds only non-secret endpoint settings. The
+// password fields are cleared before the flow begins, so decrypting a profile
+// can never turn into a browser-visible password default.
+func newPostgresSetupFromConfig(configPath string, cfg config.Config) (*PostgresSetup, error) {
+	if cfg.Source.Type != "postgres" || cfg.Target.Type != "postgres" {
+		return nil, newSetupStartError("saved profile is not a PostgreSQL-to-PostgreSQL configuration")
+	}
+	setup := NewPostgresSetup(configPath)
+	setup.source, setup.target = cfg.Source, cfg.Target
+	setup.source.Password, setup.target.Password = "", ""
+	setup.mode = cfg.Migration.TargetMode
+	return setup, nil
+}
+
 func (setup *PostgresSetup) Prompt() SetupPrompt {
 	setup.mu.Lock()
 	defer setup.mu.Unlock()
@@ -104,8 +188,15 @@ func (setup *PostgresSetup) Input(input string) SetupPrompt {
 	value := strings.TrimSpace(input)
 	switch setup.step {
 	case postgresSourceHost:
-		setup.source.Host, setup.step = setupRequired(value, "localhost", postgresSourceHost), postgresSourcePort
+		fallback := setup.source.Host
+		if fallback == "" {
+			fallback = "localhost"
+		}
+		setup.source.Host, setup.step = setupRequired(value, fallback, postgresSourceHost), postgresSourcePort
 	case postgresSourcePort:
+		if value == "" && setup.source.Port > 0 {
+			value = strconv.Itoa(setup.source.Port)
+		}
 		port, ok := setupPort(value)
 		if !ok {
 			setup.error = "source PostgreSQL port must be a number from 1 to 65535"
@@ -114,11 +205,17 @@ func (setup *PostgresSetup) Input(input string) SetupPrompt {
 		setup.source.Port, setup.step = port, postgresSourceDatabase
 	case postgresSourceDatabase:
 		if value == "" {
+			value = setup.source.Database
+		}
+		if value == "" {
 			setup.error = "source PostgreSQL database is required"
 			return setup.prompt()
 		}
 		setup.source.Database, setup.step = value, postgresSourceUser
 	case postgresSourceUser:
+		if value == "" {
+			value = setup.source.User
+		}
 		if value == "" {
 			setup.error = "source PostgreSQL username is required"
 			return setup.prompt()
@@ -135,8 +232,15 @@ func (setup *PostgresSetup) Input(input string) SetupPrompt {
 		}
 		setup.step = postgresTargetHost
 	case postgresTargetHost:
-		setup.target.Host, setup.step = setupRequired(value, "localhost", postgresTargetHost), postgresTargetPort
+		fallback := setup.target.Host
+		if fallback == "" {
+			fallback = "localhost"
+		}
+		setup.target.Host, setup.step = setupRequired(value, fallback, postgresTargetHost), postgresTargetPort
 	case postgresTargetPort:
+		if value == "" && setup.target.Port > 0 {
+			value = strconv.Itoa(setup.target.Port)
+		}
 		port, ok := setupPort(value)
 		if !ok {
 			setup.error = "target PostgreSQL port must be a number from 1 to 65535"
@@ -145,11 +249,17 @@ func (setup *PostgresSetup) Input(input string) SetupPrompt {
 		setup.target.Port, setup.step = port, postgresTargetDatabase
 	case postgresTargetDatabase:
 		if value == "" {
+			value = setup.target.Database
+		}
+		if value == "" {
 			setup.error = "target PostgreSQL database is required"
 			return setup.prompt()
 		}
 		setup.target.Database, setup.step = value, postgresTargetUser
 	case postgresTargetUser:
+		if value == "" {
+			value = setup.target.User
+		}
 		if value == "" {
 			setup.error = "target PostgreSQL username is required"
 			return setup.prompt()
@@ -167,7 +277,10 @@ func (setup *PostgresSetup) Input(input string) SetupPrompt {
 		setup.step = postgresTargetMode
 	case postgresTargetMode:
 		if value == "" {
-			value = "drop_recreate"
+			value = setup.mode
+			if value == "" {
+				value = "drop_recreate"
+			}
 		}
 		if value != "drop_recreate" && value != "upsert" {
 			setup.error = "target mode must be drop_recreate or upsert"
@@ -235,27 +348,42 @@ func (setup *PostgresSetup) prompt() SetupPrompt {
 	prompt := SetupPrompt{Error: setup.error, ConfigPath: setup.path}
 	switch setup.step {
 	case postgresSourceHost:
-		prompt.Step, prompt.Text, prompt.Default = "source_host", "Source PostgreSQL host", "localhost"
+		prompt.Step, prompt.Text, prompt.Default = "source_host", "Source PostgreSQL host", setup.source.Host
+		if prompt.Default == "" {
+			prompt.Default = "localhost"
+		}
 	case postgresSourcePort:
-		prompt.Step, prompt.Text, prompt.Default = "source_port", "Source PostgreSQL port", "5432"
+		prompt.Step, prompt.Text, prompt.Default = "source_port", "Source PostgreSQL port", strconv.Itoa(setup.source.Port)
+		if setup.source.Port == 0 {
+			prompt.Default = "5432"
+		}
 	case postgresSourceDatabase:
-		prompt.Step, prompt.Text = "source_database", "Source PostgreSQL database"
+		prompt.Step, prompt.Text, prompt.Default = "source_database", "Source PostgreSQL database", setup.source.Database
 	case postgresSourceUser:
-		prompt.Step, prompt.Text = "source_user", "Source PostgreSQL username"
+		prompt.Step, prompt.Text, prompt.Default = "source_user", "Source PostgreSQL username", setup.source.User
 	case postgresSourcePassword:
 		prompt.Step, prompt.Text, prompt.Masked = "source_password", "Source PostgreSQL password", true
 	case postgresTargetHost:
-		prompt.Step, prompt.Text, prompt.Default = "target_host", "Target PostgreSQL host", "localhost"
+		prompt.Step, prompt.Text, prompt.Default = "target_host", "Target PostgreSQL host", setup.target.Host
+		if prompt.Default == "" {
+			prompt.Default = "localhost"
+		}
 	case postgresTargetPort:
-		prompt.Step, prompt.Text, prompt.Default = "target_port", "Target PostgreSQL port", "5432"
+		prompt.Step, prompt.Text, prompt.Default = "target_port", "Target PostgreSQL port", strconv.Itoa(setup.target.Port)
+		if setup.target.Port == 0 {
+			prompt.Default = "5432"
+		}
 	case postgresTargetDatabase:
-		prompt.Step, prompt.Text = "target_database", "Target PostgreSQL database"
+		prompt.Step, prompt.Text, prompt.Default = "target_database", "Target PostgreSQL database", setup.target.Database
 	case postgresTargetUser:
-		prompt.Step, prompt.Text = "target_user", "Target PostgreSQL username"
+		prompt.Step, prompt.Text, prompt.Default = "target_user", "Target PostgreSQL username", setup.target.User
 	case postgresTargetPassword:
 		prompt.Step, prompt.Text, prompt.Masked = "target_password", "Target PostgreSQL password", true
 	case postgresTargetMode:
-		prompt.Step, prompt.Text, prompt.Default, prompt.Choices = "target_mode", "Target mode", "drop_recreate", []string{"drop_recreate", "upsert"}
+		prompt.Step, prompt.Text, prompt.Default, prompt.Choices = "target_mode", "Target mode", setup.mode, []string{"drop_recreate", "upsert"}
+		if prompt.Default == "" {
+			prompt.Default = "drop_recreate"
+		}
 	case postgresConfigPath:
 		prompt.Step, prompt.Text, prompt.Default = "config_path", "Configuration file path", setup.path
 	case postgresConfirm:

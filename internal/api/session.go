@@ -20,8 +20,9 @@ import (
 // reads, and an operator who mistyped one would see it accepted and then
 // ignored.
 const (
-	SessionConfig = "config"
-	SessionState  = "state"
+	SessionConfig  = "config"
+	SessionProfile = "profile"
+	SessionState   = "state"
 )
 
 // errUnknownSessionKey is returned for a key dmtx does not have.
@@ -30,8 +31,9 @@ var errUnknownSessionKey = errors.New("unknown session key")
 // sessionKeys describes what each key defaults, for a console building its own
 // settings list rather than hard-coding one that drifts.
 var sessionKeys = map[string]string{
-	SessionConfig: "configuration file used when a command does not name one",
-	SessionState:  "state database used when a command does not name one",
+	SessionConfig:  "configuration file used when a command does not name one",
+	SessionProfile: "encrypted profile used when a command does not name an origin",
+	SessionState:   "state database used when a command does not name one",
 }
 
 // sessionDefaults remembers what an operator would otherwise retype.
@@ -189,13 +191,67 @@ func (defaults *sessionDefaults) persistLocked() error {
 // a field before reaching it is the same kind of act as parseRequest resolving
 // an alias or supplying Latest.
 func (defaults *sessionDefaults) applyTo(request app.Request) app.Request {
-	if request.ConfigPath == "" {
-		request.ConfigPath = defaults.get(SessionConfig)
+	// A typed profile is an explicit origin. Filling ConfigPath beside it
+	// would turn valid DMT syntax (--profile NAME) into an ambiguous request
+	// whenever the session also remembered a config file.
+	if request.ConfigPath == "" && request.ProfileName == "" {
+		// DMT gives a saved profile precedence over a session config. A profile
+		// is a whole protected origin, whereas a config is a file path; setting
+		// both must not turn the request ambiguous or silently ignore profile.
+		if profile := defaults.get(SessionProfile); profile != "" {
+			request.ProfileName = profile
+		} else {
+			request.ConfigPath = defaults.get(SessionConfig)
+		}
 	}
 	if request.StatePath == "" {
 		request.StatePath = defaults.get(SessionState)
 	}
 	return request
+}
+
+// applyDefaults resolves a request for this particular console. Session values
+// remain the operator's explicit preference; the server fallback only makes a
+// bare state-reporting command useful when no preference has been set.
+func (server *Server) applyDefaults(request app.Request) app.Request {
+	request = server.defaults.applyTo(request)
+	request = app.ApplyCommandDefaults(request)
+	if request.StatePath == "" {
+		if request.ConfigPath != "" && commandUsesConfigDerivedState(request.Command) {
+			request.StatePath = request.ConfigPath + ".state.db"
+		} else {
+			request.StatePath = server.defaultStatePath
+		}
+	}
+	return request
+}
+
+// commandUsesConfigDerivedState identifies the commands whose DMTX state path
+// is conventionally derived from their chosen configuration. The session and
+// project fallback remain necessary for profile-only and bare history/status
+// commands, where no safe configuration path can be inferred.
+func commandUsesConfigDerivedState(command string) bool {
+	switch command {
+	case "run", "resume", "status", "history", "diagnose":
+		return true
+	default:
+		return false
+	}
+}
+
+// rememberStatePath makes the last state-bearing console job the default for
+// later state reporting. ParseRequest resolves run and resume's ordinary
+// config-derived state path before the job starts, so this preserves the
+// actual SQLite database instead of guessing it from a later bare /history.
+//
+// Session storage is an operator convenience. A persistence failure leaves
+// the newly set value usable in this server's memory (set updates it before it
+// writes), and must not reject a job that has already been accepted to run.
+func (server *Server) rememberStatePath(path string) {
+	if path == "" || path == server.defaultStatePath {
+		return
+	}
+	_ = server.defaults.set(SessionState, path)
 }
 
 // session reports the defaults and the keys that may be set.

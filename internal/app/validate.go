@@ -33,7 +33,7 @@ func executeValidate(ctx context.Context, request Request) Outcome {
 	if err != nil {
 		return out.failWith(ConfigurationError, "validation: "+err.Error())
 	}
-	if err := out.setPayload(PayloadResult, result); err != nil {
+	if err := out.setPayload(PayloadValidationResult, result); err != nil {
 		return out.failWith(FileError, "write validation: "+err.Error())
 	}
 	if !result.Passed {

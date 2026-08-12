@@ -16,7 +16,7 @@ import (
 	"github.com/johndauphine/dmtx/internal/secrets"
 )
 
-func TestAIArgumentsAcceptOnlyConfigReview(t *testing.T) {
+func TestAIArgumentsAcceptDMTConfigReviewSpellings(t *testing.T) {
 	request, ok := aiArguments([]string{"config-review", "--config", "migration.yaml", "--timeout", "12"})
 	if !ok {
 		t.Fatal("config-review arguments were rejected")
@@ -25,8 +25,15 @@ func TestAIArgumentsAcceptOnlyConfigReview(t *testing.T) {
 		t.Fatalf("unexpected request: %+v", request)
 	}
 
-	if _, ok := aiArguments([]string{"runbook", "--config", "migration.yaml"}); ok {
-		t.Fatal("unsupported AI runbook action was accepted")
+	request, ok = aiArguments([]string{
+		"runbook", "@migration.yaml", "--timeout=1m30s", "--request", "focus", "on", "indexes",
+	})
+	if !ok {
+		t.Fatal("DMT runbook alias and argument syntax were rejected")
+	}
+	if request.AIAction != "config-review" || request.ConfigPath != "migration.yaml" ||
+		request.AITimeout != 90 || request.AIRequest != "focus on indexes" {
+		t.Fatalf("unexpected runbook request: %+v", request)
 	}
 }
 

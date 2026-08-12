@@ -7,6 +7,9 @@ func TestWebUISupportMatrix(t *testing.T) {
 		"run": true, "resume": true, "status": true, "history": true,
 		"validate": true, "diagnose": true, "preflight": true, "analyze": true,
 		"init": true, "init-secrets": true, "config": true, "profile": true,
+		"ai": true, "setup": true, "session": true, "logs": true,
+		"about": true, "help": true,
+		"clear": true, "quit": true,
 	}
 	for _, command := range Commands {
 		if !supported[command.Name] {
@@ -16,20 +19,11 @@ func TestWebUISupportMatrix(t *testing.T) {
 			t.Errorf("%s is WebUI %q, want supported", command.Name, command.WebUI)
 		}
 	}
-	for _, name := range []string{"ai", "setup"} {
-		command, ok := Resolve(name)
-		if !ok {
-			t.Fatalf("missing registered command %q", name)
-		}
-		if command.WebUI != Planned {
-			t.Errorf("unfinished command %s is WebUI %q, want planned", name, command.WebUI)
-		}
-	}
 }
 
-func TestEveryCommandHasFrontendDisposition(t *testing.T) {
+func TestEveryCommandHasRequiredInteractiveMetadata(t *testing.T) {
 	if !Valid() {
-		t.Fatal("every registered command must declare TUI and WebUI disposition")
+		t.Fatal("every registered command must declare name, description, category, and frontend dispositions")
 	}
 }
 
@@ -47,6 +41,22 @@ func TestHealthCheckAliasIsRegistered(t *testing.T) {
 	t.Fatal("preflight must retain the health-check alias")
 }
 
+func TestWizardIsNotAliasedToSetup(t *testing.T) {
+	wizard, ok := Resolve("wizard")
+	if !ok || wizard.WebUI != Omitted || wizard.Note == "" {
+		t.Fatalf("wizard disposition = %+v, want explicit omitted editor-mode explanation", wizard)
+	}
+	setup, ok := Resolve("setup")
+	if !ok {
+		t.Fatal("setup is missing")
+	}
+	for _, alias := range setup.Aliases {
+		if alias == "wizard" {
+			t.Fatal("wizard must not be a setup alias")
+		}
+	}
+}
+
 // TestValidRejectsEachBrokenInvariant feeds the validator registries that break
 // one rule each.
 //
@@ -56,32 +66,34 @@ func TestHealthCheckAliasIsRegistered(t *testing.T) {
 // its input as an argument.
 func TestValidRejectsEachBrokenInvariant(t *testing.T) {
 	sound := []Command{
-		{Name: "run", TUI: Planned, WebUI: Planned},
-		{Name: "preflight", Aliases: []string{"health-check"}, TUI: Planned, WebUI: Planned},
-		{Name: "serve", TUI: Omitted, WebUI: Omitted, Note: "starts a front end"},
+		{Name: "run", Description: "Run a migration", Category: "migration", TUI: Planned, WebUI: Planned},
+		{Name: "preflight", Aliases: []string{"health-check"}, Description: "Run preflight checks", Category: "inspect", TUI: Planned, WebUI: Planned},
+		{Name: "serve", Description: "Start a front end", Category: "system", TUI: Omitted, WebUI: Omitted, Note: "starts a front end"},
 	}
 	if !valid(sound) {
 		t.Fatal("a sound registry was rejected, so every case below proves nothing")
 	}
 
 	for name, broken := range map[string][]Command{
-		"no name":              {{Name: "", TUI: Planned, WebUI: Planned}},
-		"no TUI disposition":   {{Name: "run", WebUI: Planned}},
-		"no WebUI disposition": {{Name: "run", TUI: Planned}},
+		"no name":              {{Name: "", Description: "Run a migration", Category: "migration", TUI: Planned, WebUI: Planned}},
+		"no description":       {{Name: "run", Category: "migration", TUI: Planned, WebUI: Planned}},
+		"no category":          {{Name: "run", Description: "Run a migration", TUI: Planned, WebUI: Planned}},
+		"no TUI disposition":   {{Name: "run", Description: "Run a migration", Category: "migration", WebUI: Planned}},
+		"no WebUI disposition": {{Name: "run", Description: "Run a migration", Category: "migration", TUI: Planned}},
 		"omitted with no reason": {
-			{Name: "cache", TUI: Omitted, WebUI: Omitted},
+			{Name: "cache", Description: "Manage cache", Category: "system", TUI: Omitted, WebUI: Omitted},
 		},
 		"two commands share a name": {
-			{Name: "run", TUI: Planned, WebUI: Planned},
-			{Name: "run", TUI: Planned, WebUI: Planned},
+			{Name: "run", Description: "Run a migration", Category: "migration", TUI: Planned, WebUI: Planned},
+			{Name: "run", Description: "Run another migration", Category: "migration", TUI: Planned, WebUI: Planned},
 		},
 		"an alias collides with a name": {
-			{Name: "status", TUI: Planned, WebUI: Planned},
-			{Name: "analyze", Aliases: []string{"status"}, TUI: Planned, WebUI: Planned},
+			{Name: "status", Description: "Show status", Category: "inspect", TUI: Planned, WebUI: Planned},
+			{Name: "analyze", Aliases: []string{"status"}, Description: "Analyze plan", Category: "inspect", TUI: Planned, WebUI: Planned},
 		},
 		"two commands share an alias": {
-			{Name: "run", Aliases: []string{"go"}, TUI: Planned, WebUI: Planned},
-			{Name: "resume", Aliases: []string{"go"}, TUI: Planned, WebUI: Planned},
+			{Name: "run", Aliases: []string{"go"}, Description: "Run a migration", Category: "migration", TUI: Planned, WebUI: Planned},
+			{Name: "resume", Aliases: []string{"go"}, Description: "Resume a migration", Category: "migration", TUI: Planned, WebUI: Planned},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

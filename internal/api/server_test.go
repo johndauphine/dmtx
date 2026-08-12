@@ -7,10 +7,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johndauphine/dmtx/internal/app"
+	"github.com/johndauphine/dmtx/internal/state"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -125,6 +128,35 @@ func TestSessionCookieAuthenticatesSubsequentRequests(t *testing.T) {
 	}
 }
 
+// TestCommandsExposePaletteMetadata pins the fields the console needs to
+// describe and group every registry command instead of carrying a second list.
+func TestCommandsExposePaletteMetadata(t *testing.T) {
+	server := newTestServer(t)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/commands", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: server.auth.session})
+	recorder := httptest.NewRecorder()
+	server.routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("commands returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var commands []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Category    string `json:"category"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&commands); err != nil {
+		t.Fatalf("decode commands: %v", err)
+	}
+	if len(commands) == 0 {
+		t.Fatal("commands response is empty")
+	}
+	for _, command := range commands {
+		if command.Name == "" || command.Description == "" || command.Category == "" {
+			t.Errorf("incomplete palette metadata: %+v", command)
+		}
+	}
+}
+
 // TestExecuteRejectsUnknownFields pins that a client cannot believe it asked
 // for something the server ignored. A caller sending force_resume to a server
 // that does not know the field must be told, not silently obeyed differently.
@@ -167,6 +199,69 @@ func TestFailedCommandIsNotAnHTTPError(t *testing.T) {
 	}
 	if len(outcome.Messages) == 0 {
 		t.Fatal("refused command carried no explanation")
+	}
+}
+
+// TestStateCommandsExposeStructuredHistoryForTheConsole proves the API
+// supplies the two shapes the WebUI renders: an empty history list and a
+// populated latest/history record. Rendering remains a browser responsibility;
+// this test prevents that renderer from being handed only a generic success.
+func TestStateCommandsExposeStructuredHistoryForTheConsole(t *testing.T) {
+	server := newTestServer(t)
+	statePath := filepath.Join(t.TempDir(), "migration.state.db")
+
+	execute := func(command string) app.Outcome {
+		t.Helper()
+		body, err := json.Marshal(app.Request{
+			Command: command, StatePath: statePath, Latest: command == "status",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/execute", bytes.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+server.auth.session)
+		recorder := httptest.NewRecorder()
+		server.routes().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("execute %s = %d: %s", command, recorder.Code, recorder.Body)
+		}
+		var outcome app.Outcome
+		if err := json.NewDecoder(recorder.Body).Decode(&outcome); err != nil {
+			t.Fatal(err)
+		}
+		return outcome
+	}
+
+	empty := execute("history")
+	if empty.ExitCode != 0 || empty.Payload == nil || empty.Payload.Kind != app.PayloadRuns || string(empty.Payload.Data) != "[]" {
+		t.Fatalf("empty history = %+v", empty)
+	}
+
+	store, err := state.NewBackend(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InitializeRun(state.Run{
+		ID: "webui-history-run", Source: "source.db", Target: "target.db",
+		Outcome: state.Success, Resumable: false, Reason: "completed",
+		StartedAt: time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC),
+		EndedAt:   time.Date(2026, 8, 11, 12, 1, 0, 0, time.UTC),
+	}, "test-config"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, command := range []string{"status", "history"} {
+		outcome := execute(command)
+		if outcome.ExitCode != 0 || outcome.Payload == nil {
+			t.Fatalf("%s = %+v", command, outcome)
+		}
+		wantKind := app.PayloadRun
+		if command == "history" {
+			wantKind = app.PayloadRuns
+		}
+		if outcome.Payload.Kind != wantKind || !bytes.Contains(outcome.Payload.Data, []byte(`"id":"webui-history-run"`)) {
+			t.Errorf("%s payload = kind %q data %s, want %q with seeded run", command, outcome.Payload.Kind, outcome.Payload.Data, wantKind)
+		}
 	}
 }
 
@@ -256,7 +351,7 @@ func TestAPIAndCLIProduceIdenticalOutcomes(t *testing.T) {
 					// resolved the request to, not against what was sent.
 					direct := app.Execute(
 						context.Background(),
-						server.defaults.applyTo(request),
+						server.applyDefaults(request),
 					)
 					expected, err := json.Marshal(direct)
 					if err != nil {

@@ -117,15 +117,16 @@ func splitLine(line string) ([]string, error) {
 // nothing else, so a script driving the API directly is unaffected by the
 // console having a different input shape.
 //
-// Session defaults are applied to the parsed Request, so what comes back is
-// what would run rather than what was typed. Showing the operator anything else
-// would be the status-bar mistake again: a display that is right until a
-// default makes it wrong.
+// Console defaults are applied to the parsed Request, so what comes back is
+// what would run rather than what was typed. They include an explicit session
+// default and the project-scoped state fallback used by bare /history and
+// /status. Showing the operator anything else would be the status-bar mistake
+// again: a display that is right until a default makes it wrong.
 //
 // POST /api/v1/jobs applies them again to whatever it is sent, which costs
-// nothing: applyTo only fills fields that are empty, so a Request that already
-// has them is unchanged. Applying here as well is what lets a console show the
-// resolved paths before it starts anything, rather than after.
+// nothing: applyDefaults only fills fields that are empty, so a Request that
+// already has them is unchanged. Applying here as well is what lets a console
+// show the resolved paths before it starts anything, rather than after.
 func (server *Server) parse(writer http.ResponseWriter, request *http.Request) {
 	var asked struct {
 		Line string `json:"line"`
@@ -152,6 +153,13 @@ func (server *Server) parse(writer http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
+	// A browser console is conventionally slash-first while the command line
+	// receives its command name without that decoration. Normalise only the
+	// first word: later words are arguments, and stripping a slash from one of
+	// those would turn an absolute path into a different path.
+	if len(args) > 0 && strings.HasPrefix(args[0], "/") {
+		args[0] = strings.TrimPrefix(args[0], "/")
+	}
 
 	parsed, outcome, dispatched := app.ParseRequest(args)
 	if !dispatched {
@@ -167,6 +175,6 @@ func (server *Server) parse(writer http.ResponseWriter, request *http.Request) {
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"dispatched": true,
-		"request":    server.defaults.applyTo(parsed),
+		"request":    server.applyDefaults(parsed),
 	})
 }

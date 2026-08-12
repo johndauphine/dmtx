@@ -32,7 +32,7 @@ func (server *Server) execute(writer http.ResponseWriter, request *http.Request)
 	// means the synchronous and streaming surfaces cannot drift into deciding
 	// things differently - and it is what stops a closed tab from killing a
 	// migration, because the job's context is not this request's.
-	running, err := server.jobs.start(decoded)
+	running, err := server.start(decoded)
 	if err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{
 			"error": "could not start the command",
@@ -82,10 +82,10 @@ func (server *Server) decodeRequest(
 		})
 		return app.Request{}, false
 	}
-	// Session defaults fill in what the request did not say, and only here.
+	// Console defaults fill in what the request did not say, and only here.
 	// The command line resolves its own arguments and never consults these, so
 	// a destructive command typed in a terminal always names what it acts on.
-	return server.defaults.applyTo(decoded), true
+	return server.applyDefaults(decoded), true
 }
 
 // commands reports the command registry, so a front end can build its own
@@ -93,34 +93,23 @@ func (server *Server) decodeRequest(
 // that drifts.
 func (server *Server) commands(writer http.ResponseWriter, request *http.Request) {
 	type command struct {
-		Name    string   `json:"name"`
-		Aliases []string `json:"aliases,omitempty"`
-		WebUI   string   `json:"webui"`
+		Name        string   `json:"name"`
+		Aliases     []string `json:"aliases,omitempty"`
+		Description string   `json:"description"`
+		Category    string   `json:"category"`
+		WebUI       string   `json:"webui"`
 	}
 	listed := make([]command, 0, len(contract.Commands))
 	for _, registered := range contract.Commands {
 		listed = append(listed, command{
-			Name:    registered.Name,
-			Aliases: registered.Aliases,
-			WebUI:   string(registered.WebUI),
+			Name:        registered.Name,
+			Aliases:     registered.Aliases,
+			Description: registered.Description,
+			Category:    registered.Category,
+			WebUI:       string(registered.WebUI),
 		})
 	}
 	writeJSON(writer, http.StatusOK, listed)
-}
-
-// placeholder stands in for the console until it exists. It is authenticated
-// like everything else so the auth path is exercised from the first request an
-// operator makes.
-func (server *Server) placeholder(writer http.ResponseWriter, request *http.Request) {
-	if request.URL.Path != "/" {
-		http.NotFound(writer, request)
-		return
-	}
-	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = writer.Write([]byte(
-		"dmtx is serving.\n\n" +
-			"The console is not built yet. The API is at POST /api/v1/execute.\n",
-	))
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {
