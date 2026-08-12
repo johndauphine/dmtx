@@ -142,6 +142,10 @@ func TestProfileExportWritesOwnerOnlyPlaintext(t *testing.T) {
 	if result.ExitCode != Success {
 		t.Fatalf("export outcome: %+v", result)
 	}
+	wantMessage := "exported plaintext profile prod to " + output
+	if len(result.Messages) != 1 || result.Messages[0].Text != wantMessage {
+		t.Fatalf("export messages = %+v, want %q", result.Messages, wantMessage)
+	}
 	data, err := os.ReadFile(output)
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +159,20 @@ func TestProfileExportWritesOwnerOnlyPlaintext(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("export permissions = %04o, want 0600", info.Mode().Perm())
+	}
+
+	failure := executeProfileWithStore(newOutcome("profile"), Request{
+		Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: t.TempDir(),
+	}, open)
+	if failure.ExitCode != FileError {
+		t.Fatalf("failed export outcome: %+v", failure)
+	}
+	failureText := strings.Join(messageTexts(failure), "\n")
+	if !strings.Contains(failureText, "export plaintext profile:") {
+		t.Fatalf("failed export message = %q, want plaintext warning", failureText)
+	}
+	if strings.Contains(failureText, "export encrypted profile") {
+		t.Fatalf("failed export message incorrectly describes plaintext as encrypted: %q", failureText)
 	}
 }
 

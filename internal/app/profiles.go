@@ -141,9 +141,9 @@ func executeProfileWithStore(
 			return out.failWith(ConfigurationError, "profile configuration: "+err.Error())
 		}
 		if err := writeProtectedProfileExport(request.OutputPath, data); err != nil {
-			return out.failWith(FileError, "export encrypted profile: "+err.Error())
+			return out.failWith(FileError, "export plaintext profile: "+err.Error())
 		}
-		out.out("exported encrypted profile " + request.ProfileName + " to " + request.OutputPath)
+		out.out("exported plaintext profile " + request.ProfileName + " to " + request.OutputPath)
 		return out.done(Success)
 	default:
 		return out.failWith(ConfigurationError, "usage: dmtx profile save NAME --config migration.yaml | list | delete NAME")
