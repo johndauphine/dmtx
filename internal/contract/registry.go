@@ -37,10 +37,31 @@ var Commands = []Command{
 	{Name: "preflight", Aliases: []string{"health-check"}, Description: "Run preflight checks", Category: "inspect", TUI: Omitted, WebUI: Supported},
 	{Name: "analyze", Description: "Explain the transfer plan", Category: "inspect", TUI: Omitted, WebUI: Supported},
 	{Name: "profile", Description: "Manage saved profiles", Category: "configuration", TUI: Omitted, WebUI: Supported},
-	{Name: "ai", Description: "Request an AI configuration review", Category: "advisory", TUI: Omitted, WebUI: Planned},
+	{Name: "ai", Description: "Request an AI configuration review", Category: "advisory", TUI: Omitted, WebUI: Supported},
 	{Name: "init", Description: "Initialize a configuration", Category: "configuration", TUI: Omitted, WebUI: Supported},
 	{Name: "init-secrets", Description: "Initialize protected secrets", Category: "configuration", TUI: Omitted, WebUI: Supported},
-	{Name: "setup", Description: "Run guided setup", Category: "configuration", TUI: Omitted, WebUI: Planned},
+	{Name: "setup", Description: "Run guided setup", Category: "configuration", TUI: Omitted, WebUI: Supported},
+	{
+		Name: "wizard", Description: "Edit a migration configuration", Category: "configuration", TUI: Omitted, WebUI: Omitted,
+		Note: "dmtx has guided setup but no separate in-place configuration editor; setup never overwrites an existing configuration",
+	},
+	// These are browser-session commands. Their state and rendering belong to
+	// the WebUI, but placing them in the shared registry makes the command
+	// vocabulary match DMT rather than maintaining a hidden client-side list.
+	{Name: "session", Description: "Manage session defaults", Category: "system", TUI: Omitted, WebUI: Supported},
+	{Name: "logs", Description: "Save the session transcript", Category: "system", TUI: Omitted, WebUI: Supported},
+	{
+		Name: "verbosity", Description: "Show or set log verbosity", Category: "system", TUI: Omitted, WebUI: Omitted,
+		Note: "dmtx has no configurable logging subsystem; a stored level would not affect command behavior",
+	},
+	{
+		Name: "explore", Description: "Manage exploration policy", Category: "system", TUI: Omitted, WebUI: Omitted,
+		Note: "dmtx runtime tuning is deterministic safety control, not DMT's exploratory policy",
+	},
+	{Name: "about", Description: "Show version and features", Category: "system", TUI: Omitted, WebUI: Supported},
+	{Name: "help", Description: "Show command help", Category: "system", TUI: Omitted, WebUI: Supported},
+	{Name: "clear", Description: "Clear the console", Category: "system", TUI: Omitted, WebUI: Supported},
+	{Name: "quit", Aliases: []string{"exit"}, Description: "Leave the console", Category: "system", TUI: Omitted, WebUI: Supported},
 	// cache is Omitted rather than Planned because there is nothing to clear.
 	// DMT's cache command clears a type-mapping cache; dmtx has none, and the
 	// only thing it keeps under the user cache directory is lease coordination

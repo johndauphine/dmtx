@@ -95,8 +95,8 @@ func executeDiagnose(request Request) Outcome {
 	return out.done(Success)
 }
 
-// selectRunToDiagnose finds the run to explain: the one named, or the most
-// recent that did not succeed.
+// selectRunToDiagnose finds the run to explain: the latest state of the one
+// named, or the most recent run whose latest state did not succeed.
 //
 // Not simply the latest: after a failure an operator often runs something else
 // - a status, a validate - and the latest run may be the one they just did.
@@ -107,22 +107,33 @@ func selectRunToDiagnose(store state.Backend, runID string) (state.Run, bool, er
 		return state.Run{}, false, err
 	}
 	if runID != "" {
-		for _, run := range runs {
+		for index := len(runs) - 1; index >= 0; index-- {
+			run := runs[index]
 			if run.ID == runID {
 				return run, true, nil
 			}
 		}
 		return state.Run{}, false, nil
 	}
+	seen := make(map[string]struct{}, len(runs))
+	var latestSuccessful state.Run
 	for index := len(runs) - 1; index >= 0; index-- {
-		if runs[index].Outcome != state.Success {
-			return runs[index], true, nil
+		run := runs[index]
+		if _, alreadySeen := seen[run.ID]; alreadySeen {
+			continue
+		}
+		seen[run.ID] = struct{}{}
+		if run.Outcome != state.Success {
+			return run, true, nil
+		}
+		if latestSuccessful.ID == "" {
+			latestSuccessful = run
 		}
 	}
 	// Nothing went wrong. The latest run is still worth reporting, because
 	// "there is nothing to diagnose" is a useful answer and an empty one is not.
-	if len(runs) > 0 {
-		return runs[len(runs)-1], true, nil
+	if latestSuccessful.ID != "" {
+		return latestSuccessful, true, nil
 	}
 	return state.Run{}, false, nil
 }

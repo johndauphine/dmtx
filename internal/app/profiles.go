@@ -125,8 +125,47 @@ func executeProfileWithStore(
 		out.out("deleted encrypted profile " + request.ProfileName)
 		return out.done(Success)
 	case "export":
-		return out.failWith(ConfigurationError, "profile export is deferred until passphrase-protected export/import ship together")
+		if request.ProfileName == "" || request.OutputPath == "" {
+			return out.failWith(ConfigurationError, "usage: dmtx profile export NAME [OUTPUT]")
+		}
+		store, err := open()
+		if err != nil {
+			return out.failWith(FileError, "open encrypted profile store: "+err.Error())
+		}
+		defer store.Close()
+		data, err := store.Load(request.ProfileName)
+		if err != nil {
+			return out.failWith(FileError, "load encrypted profile: "+err.Error())
+		}
+		if _, err := config.Parse(data); err != nil {
+			return out.failWith(ConfigurationError, "profile configuration: "+err.Error())
+		}
+		if err := writeProtectedProfileExport(request.OutputPath, data); err != nil {
+			return out.failWith(FileError, "export encrypted profile: "+err.Error())
+		}
+		out.out("exported encrypted profile " + request.ProfileName + " to " + request.OutputPath)
+		return out.done(Success)
 	default:
 		return out.failWith(ConfigurationError, "usage: dmtx profile save NAME --config migration.yaml | list | delete NAME")
 	}
+}
+
+// writeProtectedProfileExport writes the deliberately requested plaintext
+// profile with owner-only permissions. The explicit export is the boundary at
+// which sealed profile bytes are allowed back onto disk; never loosen the file
+// simply because a prior file at the path had looser permissions.
+func writeProtectedProfileExport(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }

@@ -110,6 +110,55 @@ func TestAnExplicitValueBeatsADefault(t *testing.T) {
 	}
 }
 
+func TestProfileDefaultIsAnOperativeAndUnambiguousOrigin(t *testing.T) {
+	server, _ := sessionServer(t)
+	if code := setDefault(t, server, SessionConfig, "/the/default.yaml").Code; code != http.StatusOK {
+		t.Fatalf("setting config default returned %d", code)
+	}
+	if code := setDefault(t, server, SessionProfile, "production").Code; code != http.StatusOK {
+		t.Fatalf("setting profile default returned %d", code)
+	}
+
+	filled := server.defaults.applyTo(app.Request{Command: "validate"})
+	if filled.ProfileName != "production" || filled.ConfigPath != "" {
+		t.Fatalf("profile default produced an ambiguous origin: %+v", filled)
+	}
+
+	// A typed file remains the operator's explicit choice, even when a browser
+	// session has both kinds of default saved.
+	explicit := server.defaults.applyTo(app.Request{
+		Command: "validate", ConfigPath: "typed.yaml",
+	})
+	if explicit.ConfigPath != "typed.yaml" || explicit.ProfileName != "" {
+		t.Fatalf("profile default overrode an explicit file: %+v", explicit)
+	}
+}
+
+func TestConfigDerivedStateBeatsTheConsoleFallback(t *testing.T) {
+	server, _ := sessionServer(t)
+	server.defaultStatePath = "console.state.db"
+	if code := setDefault(t, server, SessionConfig, "selected.yaml").Code; code != http.StatusOK {
+		t.Fatalf("setting config default returned %d", code)
+	}
+
+	resolved := server.applyDefaults(app.Request{Command: "run"})
+	if resolved.ConfigPath != "selected.yaml" || resolved.StatePath != "selected.yaml.state.db" {
+		t.Fatalf("session-config run = %+v, want config-derived state", resolved)
+	}
+
+	bare := server.applyDefaults(app.Request{Command: "run"})
+	if bare.StatePath != "selected.yaml.state.db" {
+		t.Fatalf("session-config run state = %q", bare.StatePath)
+	}
+
+	server, _ = sessionServer(t)
+	server.defaultStatePath = "console.state.db"
+	bare = server.applyDefaults(app.Request{Command: "run"})
+	if bare.ConfigPath != "config.yaml" || bare.StatePath != "config.yaml.state.db" {
+		t.Fatalf("bare run = %+v, want DMT config/state defaults", bare)
+	}
+}
+
 // TestTheCommandLineIgnoresSessionDefaults pins that defaults never reach the
 // command line.
 //

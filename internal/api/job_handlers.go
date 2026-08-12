@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+
+	"github.com/johndauphine/dmtx/internal/app"
 )
 
 // listJobs reports retained server jobs so a new console can recover work
@@ -18,7 +20,7 @@ func (server *Server) startJob(writer http.ResponseWriter, request *http.Request
 	if !ok {
 		return
 	}
-	running, err := server.jobs.start(decoded)
+	running, err := server.start(decoded)
 	if err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{
 			"error": "could not start the command",
@@ -29,6 +31,19 @@ func (server *Server) startJob(writer http.ResponseWriter, request *http.Request
 		"id":      running.ID(),
 		"command": running.command,
 	})
+}
+
+// start records the state a console command is about to use before releasing
+// the job to run. The browser parser has already resolved run/resume's
+// config-derived SQLite path, so the next bare /history and /status inspect
+// that same state rather than an unrelated fallback database.
+func (server *Server) start(request app.Request) (*job, error) {
+	running, err := server.jobs.start(request)
+	if err != nil {
+		return nil, err
+	}
+	server.rememberStatePath(request.StatePath)
+	return running, nil
 }
 
 // jobStatus reports where a job has got to, and its outcome once it has one.

@@ -77,6 +77,25 @@ func TestPostgresSetupUsesProtectedPasswordOrigins(t *testing.T) {
 	}
 }
 
+func TestPostgresSetupFromProfileNeverReflectsPassword(t *testing.T) {
+	setup, err := newPostgresSetupFromConfig("saved.yaml", config.Config{
+		Source:    config.Endpoint{Type: "postgres", Host: "source.example", Port: 5433, Database: "source", User: "reader", Password: "source-sentinel"},
+		Target:    config.Endpoint{Type: "postgres", Host: "target.example", Port: 5434, Database: "target", User: "writer", Password: "target-sentinel"},
+		Migration: config.Migration{TargetMode: "upsert"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []SetupPrompt{setup.Prompt(), setup.Input(""), setup.Input(""), setup.Input(""), setup.Input("")} {
+		if strings.Contains(prompt.Text+prompt.Default+prompt.Error, "sentinel") {
+			t.Fatalf("profile password reached a prompt: %+v", prompt)
+		}
+	}
+	if prompt := setup.Prompt(); !prompt.Masked || prompt.Step != "source_password" {
+		t.Fatalf("source password must still be freshly requested: %+v", prompt)
+	}
+}
+
 func TestPostgresSetupRedactsConnectionFailures(t *testing.T) {
 	setup := newPostgresSetup("migration.yaml", func(context.Context, config.Endpoint) (*sql.DB, error) {
 		return nil, errors.New("source-sentinel-password leaked by driver")

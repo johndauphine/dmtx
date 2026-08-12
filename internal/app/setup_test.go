@@ -109,3 +109,39 @@ func TestSetupRejectsUnreadableOrNonregularSQLiteSourcesWithoutLeakingPaths(t *t
 		t.Fatalf("nonregular source validation = %+v", got)
 	}
 }
+
+func TestSetupFromProfileConfigurationSeedsSafeSQLiteDefaults(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "source.db")
+	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flow, err := newSetupFromConfig("saved.yaml", config.Config{
+		Source:    config.Endpoint{Type: "sqlite", Database: source},
+		Target:    config.Endpoint{Type: "sqlite", Database: filepath.Join(directory, "target.db")},
+		Migration: config.Migration{TargetMode: "upsert"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt := flow.Prompt(); prompt.Default != source || prompt.ConfigPath != "saved.yaml" {
+		t.Fatalf("profile-backed SQLite prompt = %+v", prompt)
+	}
+	if prompt := flow.Input(""); prompt.Default != filepath.Join(directory, "target.db") {
+		t.Fatalf("target default = %+v", prompt)
+	}
+	if prompt := flow.Input(""); prompt.Default != "upsert" {
+		t.Fatalf("mode default = %+v", prompt)
+	}
+}
+
+func TestProfileSetupUsesProfileNameAsNewOutputDefault(t *testing.T) {
+	flow, err := newSetupForProfileData("saved", "", "", profileTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := flow.Prompt()
+	if prompt.ConfigPath != "saved.yaml" || prompt.Step != "source_database" {
+		t.Fatalf("profile setup prompt = %+v", prompt)
+	}
+}

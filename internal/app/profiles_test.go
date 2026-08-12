@@ -25,12 +25,15 @@ func profileTestConfig() []byte {
 	return []byte("source:\n  type: sqlite\n  database: source.db\ntarget:\n  type: sqlite\n  database: target.db\nmigration:\n  target_mode: drop_recreate\n")
 }
 
-func TestResumeProfileRequiresStateAndPreservesOrigin(t *testing.T) {
-	_, _, dispatched := ParseRequest([]string{"resume", "--profile", "prod"})
-	if dispatched {
-		t.Fatal("profile resume without explicit state dispatched")
+func TestResumeProfilePreservesDMTOriginSyntax(t *testing.T) {
+	request, _, dispatched := ParseRequest([]string{"resume", "--profile=prod"})
+	if !dispatched {
+		t.Fatal("DMT profile spelling was refused before the WebUI could apply its state default")
 	}
-	request, _, dispatched := ParseRequest([]string{"resume", "--profile", "prod", "--state", "run.db"})
+	if request.ProfileName != "prod" || request.StatePath != "" || request.ConfigPath != "" {
+		t.Fatalf("unexpected unresolved profile request: %+v", request)
+	}
+	request, _, dispatched = ParseRequest([]string{"resume", "--profile", "prod", "--state", "run.db"})
 	if !dispatched {
 		t.Fatal("profile resume with explicit state was refused")
 	}
@@ -110,6 +113,45 @@ func TestProfileCommandSaveListDelete(t *testing.T) {
 	}
 	if bytes.Contains([]byte(strings.Join(messageTexts(deleteOutcome), "\n")), []byte("password")) {
 		t.Fatal("profile output exposed plaintext")
+	}
+}
+
+func TestProfileExportWritesOwnerOnlyPlaintext(t *testing.T) {
+	profilesPath, secretsPath := profileTestPaths(t)
+	open := func() (*profiles.Store, error) {
+		return profiles.OpenWithSecrets(profilesPath, secretsPath)
+	}
+	store, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save("prod", profileTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	output := filepath.Join(t.TempDir(), "portable.yaml")
+	result := executeProfileWithStore(newOutcome("profile"), Request{
+		Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: output,
+	}, open)
+	if result.ExitCode != Success {
+		t.Fatalf("export outcome: %+v", result)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(profileTestConfig()) {
+		t.Fatalf("export bytes = %q, want saved config", data)
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("export permissions = %04o, want 0600", info.Mode().Perm())
 	}
 }
 

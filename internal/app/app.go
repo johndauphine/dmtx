@@ -99,9 +99,9 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 		}
 		return Request{}, out.done(Success), false
 	case "run":
-		options, ok := runArguments(args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, runUsage), false
+		options, err := parseRunArguments(args[1:])
+		if err != nil {
+			return refuseArguments(out, err, runUsage)
 		}
 		return Request{
 			Command:                "run",
@@ -110,11 +110,15 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 			StatePath:              options.statePath,
 			DryRun:                 options.dryRun,
 			AcknowledgeDestructive: options.destructiveAcknowledged,
+			SourceSchema:           options.sourceSchema,
+			TargetSchema:           options.targetSchema,
+			Workers:                options.workers,
+			SkipPreflight:          options.skipPreflight,
 		}, Outcome{}, true
 	case "resume":
-		options, ok := resumeArguments(args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, resumeUsage), false
+		options, err := parseResumeArguments(args[1:])
+		if err != nil {
+			return refuseArguments(out, err, resumeUsage)
 		}
 		return Request{
 			Command:                "resume",
@@ -125,75 +129,72 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 			ForceResume:            options.forceResume,
 			Abandon:                options.abandon,
 			AbandonReason:          options.abandonReason,
+			SkipPreflight:          options.skipPreflight,
 		}, Outcome{}, true
 	case "status", "history":
-		request := Request{Command: args[0], Latest: args[0] == "status"}
-		if len(args) == 3 && args[1] == "--state" {
-			request.StatePath = args[2]
+		request, err := parseStateArguments(args[0], args[1:])
+		if err != nil {
+			usage := "usage: dmtx status [CONFIG | @CONFIG | --profile NAME] [--state PATH] [-d|--detailed]"
+			if args[0] == "history" {
+				usage = "usage: dmtx history [CONFIG | @CONFIG | --profile NAME] [--state PATH] [--run ID]"
+			}
+			return refuseArguments(out, err, usage)
 		}
 		return request, Outcome{}, true
 	case "validate":
-		request, ok := configOriginArguments("validate", args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, "usage: dmtx validate (--config migration.yaml | --profile NAME)"), false
+		request, err := parseConfigOriginArguments("validate", args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx validate [CONFIG | @CONFIG | --config CONFIG | --profile NAME]")
 		}
 		return request, Outcome{}, true
 	case "config":
-		request, ok := configOriginArguments("config", args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, "usage: dmtx config (--config migration.yaml | --profile NAME)"), false
+		request, err := parseConfigOriginArguments("config", args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx config [CONFIG | @CONFIG | --config CONFIG | --profile NAME]")
 		}
 		return request, Outcome{}, true
 	case "analyze":
-		request, ok := configOriginArguments("analyze", args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, "usage: dmtx analyze (--config migration.yaml | --profile NAME)"), false
+		request, err := parseConfigOriginArguments("analyze", args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx analyze [CONFIG | @CONFIG | --config CONFIG | --profile NAME]")
 		}
 		return request, Outcome{}, true
 	case "init":
-		request, ok := initArguments(args[1:])
-		if !ok {
-			return Request{}, out.failWith(
-				ConfigurationError,
-				"usage: dmtx init [--config migration.yaml] [--force]",
-			), false
+		request, err := parseInitArguments(args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx init [--config CONFIG] [--force]")
 		}
 		return request, Outcome{}, true
 	case "init-secrets":
-		if len(args) > 2 || (len(args) == 2 && args[1] != "--force") {
-			return Request{}, out.failWith(
-				ConfigurationError,
-				"usage: dmtx init-secrets [--force]",
-			), false
+		request, err := parseInitSecretsArguments(args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx init-secrets [--force|-f] [--with-ai]")
 		}
-		return Request{Command: "init-secrets", Force: len(args) == 2}, Outcome{}, true
+		return request, Outcome{}, true
 	case "diagnose":
-		request, ok := diagnoseArguments(args[1:])
-		if !ok {
-			return Request{}, out.failWith(
-				ConfigurationError,
-				"usage: dmtx diagnose --state migration.yaml.state.db [--run ID]",
-			), false
+		request, err := parseDiagnoseArguments(args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx diagnose [CONFIG | @CONFIG | --profile NAME] [--state PATH] [--run ID]")
 		}
 		return request, Outcome{}, true
 	case "preflight", "health-check":
 		// The alias is resolved here so nothing downstream has to know it
 		// exists.
-		request, ok := configOriginArguments("preflight", args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, "usage: dmtx preflight (--config migration.yaml | --profile NAME)"), false
+		request, err := parseConfigOriginArguments("preflight", args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx preflight [CONFIG | @CONFIG | --config CONFIG | --profile NAME] [--skip-preflight LIST|all]")
 		}
 		return request, Outcome{}, true
 	case "profile":
-		request, ok := profileArguments(args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, "usage: dmtx profile save NAME --config migration.yaml | list | delete NAME"), false
+		request, err := parseProfileArguments(args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT]")
 		}
 		return request, Outcome{}, true
 	case "ai":
-		request, ok := aiArguments(args[1:])
-		if !ok {
-			return Request{}, out.failWith(ConfigurationError, "usage: dmtx ai config-review (--config migration.yaml | --profile NAME) [--request TEXT] [--timeout SECONDS]"), false
+		request, err := parseAIArguments(args[1:])
+		if err != nil {
+			return refuseArguments(out, err, "usage: dmtx ai (config-review | runbook) [CONFIG | @CONFIG | --profile NAME] [--timeout DURATION] [--request TEXT]")
 		}
 		return request, Outcome{}, true
 	default:
@@ -201,62 +202,32 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 	}
 }
 
+func refuseArguments(
+	out *outcomeBuilder,
+	err error,
+	usage string,
+) (Request, Outcome, bool) {
+	message := err.Error()
+	if usage != "" {
+		message += "\n" + usage
+	}
+	return Request{}, out.failWith(ConfigurationError, message), false
+}
+
 func configOriginArguments(command string, args []string) (Request, bool) {
-	if len(args) == 0 {
-		return Request{Command: command}, true
-	}
-	if len(args) != 2 || args[1] == "" {
-		return Request{}, false
-	}
-	request := Request{Command: command}
-	switch args[0] {
-	case "--config":
-		request.ConfigPath = args[1]
-	case "--profile":
-		request.ProfileName = args[1]
-	default:
-		return Request{}, false
-	}
-	return request, true
+	request, err := parseConfigOriginArguments(command, args)
+	return request, err == nil
 }
 
 func profileArguments(args []string) (Request, bool) {
-	if len(args) == 1 && args[0] == "list" {
-		return Request{Command: "profile", ProfileAction: "list"}, true
-	}
-	if len(args) == 2 && args[0] == "delete" && args[1] != "" {
-		return Request{Command: "profile", ProfileAction: "delete", ProfileName: args[1]}, true
-	}
-	if len(args) == 4 && args[0] == "save" && args[1] != "" && args[2] == "--config" && args[3] != "" {
-		return Request{Command: "profile", ProfileAction: "save", ProfileName: args[1], ConfigPath: args[3]}, true
-	}
-	if len(args) == 2 && args[0] == "export" && args[1] != "" {
-		return Request{Command: "profile", ProfileAction: "export", ProfileName: args[1]}, true
-	}
-	return Request{}, false
+	request, err := parseProfileArguments(args)
+	return request, err == nil
 }
 
 // initArguments reads init's flags, refusing anything it does not know.
 func initArguments(args []string) (Request, bool) {
-	request := Request{Command: "init"}
-	for index := 0; index < len(args); index++ {
-		switch args[index] {
-		case "--force":
-			if request.Force {
-				return Request{}, false
-			}
-			request.Force = true
-		case "--config":
-			if index+1 >= len(args) || request.ConfigPath != "" {
-				return Request{}, false
-			}
-			request.ConfigPath = args[index+1]
-			index++
-		default:
-			return Request{}, false
-		}
-	}
-	return request, true
+	request, err := parseInitArguments(args)
+	return request, err == nil
 }
 
 // diagnoseArguments reads diagnose's flags, refusing anything it does not know.
@@ -266,24 +237,8 @@ func initArguments(args []string) (Request, bool) {
 // the operator asked about and say nothing about it - a wrong answer delivered
 // confidently, which is worse than the error they would have fixed in seconds.
 func diagnoseArguments(args []string) (Request, bool) {
-	request := Request{Command: "diagnose"}
-	for index := 0; index < len(args); index++ {
-		var target *string
-		switch args[index] {
-		case "--state":
-			target = &request.StatePath
-		case "--run":
-			target = &request.RunID
-		default:
-			return Request{}, false
-		}
-		if index+1 >= len(args) || *target != "" {
-			return Request{}, false
-		}
-		*target = args[index+1]
-		index++
-	}
-	return request, true
+	request, err := parseDiagnoseArguments(args)
+	return request, err == nil
 }
 
 // classifyUnhandled answers for a command no surface implements yet.
@@ -353,6 +308,7 @@ func ExecuteWithProgress(
 	if resolved, ok := contract.Resolve(request.Command); ok {
 		request.Command = resolved.Name
 	}
+	request = ApplyCommandDefaults(request)
 	switch request.Command {
 	case "validate":
 		return executeValidate(ctx, request)
@@ -383,6 +339,21 @@ func ExecuteWithProgress(
 	}
 }
 
+// ApplyCommandDefaults applies DMT's historical config.yaml fallback only
+// after a surface has had its chance to apply its own session defaults.
+// Status/history intentionally do not participate: their useful WebUI default
+// is the project-scoped state database, not a config-derived one.
+func ApplyCommandDefaults(request Request) Request {
+	if request.ConfigPath != "" || request.ProfileName != "" {
+		return request
+	}
+	switch request.Command {
+	case "run", "resume", "validate", "preflight", "config", "diagnose", "analyze", "ai":
+		request.ConfigPath = "config.yaml"
+	}
+	return request
+}
+
 func executeRun(ctx context.Context, request Request, progress *progressReporter) Outcome {
 	out := newOutcome(request.Command)
 	options, ok := runOptionsFrom(request)
@@ -399,6 +370,9 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 	}
 	cfg, err := config.Parse(data)
 	if err != nil {
+		return out.failWith(ConfigurationError, "configuration: "+err.Error())
+	}
+	if err := applyInvocationOverrides(&cfg, request); err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
 	auditPath := configPath
@@ -821,42 +795,8 @@ func migrationExitCode(err error) int {
 // is required, and an unnamed state path is derived from it - belong to
 // validRunOptions, so the API reaches them too.
 func runArguments(args []string) (runOptions, bool) {
-	var options runOptions
-	for index := 0; index < len(args); index++ {
-		switch args[index] {
-		case "--config":
-			if index+1 >= len(args) || options.configPath != "" {
-				return runOptions{}, false
-			}
-			options.configPath = args[index+1]
-			index++
-		case "--profile":
-			if index+1 >= len(args) || options.profileName != "" {
-				return runOptions{}, false
-			}
-			options.profileName = args[index+1]
-			index++
-		case "--state":
-			if index+1 >= len(args) || options.statePath != "" {
-				return runOptions{}, false
-			}
-			options.statePath = args[index+1]
-			index++
-		case "--dry-run":
-			if options.dryRun {
-				return runOptions{}, false
-			}
-			options.dryRun = true
-		case "--acknowledge-destructive":
-			if options.destructiveAcknowledged {
-				return runOptions{}, false
-			}
-			options.destructiveAcknowledged = true
-		default:
-			return runOptions{}, false
-		}
-	}
-	return validRunOptions(options)
+	options, err := parseRunArguments(args)
+	return options, err == nil
 }
 
 // executeShowState serves both status and history; Latest distinguishes them.
@@ -885,6 +825,21 @@ func executeShowState(request Request) Outcome {
 			out.out("no runs recorded")
 			return out.done(Success)
 		}
+		if request.Detailed {
+			tasks, err := store.ListTasks(run.ID)
+			if err != nil {
+				out.out(err.Error())
+				return out.done(StateError)
+			}
+			if err := out.setPayload(PayloadStatusDetail, struct {
+				Run   state.Run    `json:"run"`
+				Tasks []state.Task `json:"tasks"`
+			}{Run: publicRun(run), Tasks: tasks}); err != nil {
+				out.out(err.Error())
+				return out.done(FileError)
+			}
+			return out.done(Success)
+		}
 		if err := out.setPayload(PayloadRun, publicRun(run)); err != nil {
 			out.out(err.Error())
 			return out.done(FileError)
@@ -894,6 +849,20 @@ func executeShowState(request Request) Outcome {
 	runs, err := store.List()
 	if err != nil {
 		out.out(err.Error())
+		return out.done(StateError)
+	}
+	if request.RunID != "" {
+		for index := len(runs) - 1; index >= 0; index-- {
+			if runs[index].ID != request.RunID {
+				continue
+			}
+			if err := out.setPayload(PayloadRun, publicRun(runs[index])); err != nil {
+				out.out(err.Error())
+				return out.done(FileError)
+			}
+			return out.done(Success)
+		}
+		out.out(fmt.Sprintf("no run recorded with id %q", request.RunID))
 		return out.done(StateError)
 	}
 	publicRuns := make([]state.Run, len(runs))
@@ -915,13 +884,26 @@ func publicRun(run state.Run) state.Run {
 // helpLines is the help text as data. A surface that is not a terminal needs
 // the same content without a writer to push it into.
 func helpLines() []string {
-	lines := []string{
+	return []string{
 		"dmtx - deterministic database migration tool",
-		"SQLite first pass: dmtx run --config migration.yaml",
-		"Commands:",
+		"WebUI command syntax (CONFIG may also be written @CONFIG):",
+		"  /run [CONFIG | --config CONFIG | --profile NAME] [--state PATH] [--source-schema NAME] [--target-schema NAME] [--workers N] [--skip-preflight LIST|all] [--dry-run] [--confirm-backup]",
+		"  /resume [CONFIG | --config CONFIG | --profile NAME] [--state PATH] [--force-resume] [--skip-preflight LIST|all]",
+		"  /preflight|/health-check [CONFIG | --config CONFIG | --profile NAME] [--skip-preflight LIST|all]",
+		"  /validate [CONFIG | --config CONFIG | --profile NAME]",
+		"  /diagnose [CONFIG | --config CONFIG | --profile NAME] [--state PATH] [--run ID]",
+		"  /config [CONFIG | --config CONFIG | --profile NAME]",
+		"  /analyze [CONFIG | --config CONFIG | --profile NAME]",
+		"  /ai config-review|runbook [CONFIG | --profile NAME] [--timeout DURATION] [--request TEXT]",
+		"  /status [CONFIG | --profile NAME] [--state PATH] [-d|--detailed]",
+		"  /history [CONFIG | --profile NAME] [--state PATH] [--run ID]",
+		"  /profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT]",
+		"  /init [--config CONFIG] [--force] | /init-secrets [--force|-f] [--with-ai]",
+		"  /setup [postgres] [CONFIG | @CONFIG | --config CONFIG | --profile NAME]",
+		"  /session [KEY VALUE] | /session clear [KEY]    (config, profile, state-file)",
+		"  /logs | /about | /clear | /quit|/exit",
+		"",
+		"Unavailable because DMTX has no equivalent engine capability:",
+		"  /wizard; /cache; /verbosity; /explore; !shell; DMT-only AI operation flags",
 	}
-	for _, command := range contract.Commands {
-		lines = append(lines, "  "+command.Name)
-	}
-	return lines
 }

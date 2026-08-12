@@ -112,28 +112,23 @@ func TestRunRecordsIntoTheSameStateDatabaseFromEitherSurface(t *testing.T) {
 	}
 }
 
-// TestRunWithoutAConfigAnswersUsageFromEitherSurface pins the other half of the
-// same divergence.
-//
-// executeRun had no empty-config guard, unlike validate, config, analyze and
-// preflight, so a request with no config reached os.ReadFile and produced
-// "read configuration: open : no such file or directory" - an error naming an
-// empty path, where the command line answered with usage.
-func TestRunWithoutAConfigAnswersUsageFromEitherSurface(t *testing.T) {
+// TestRunWithoutAConfigUsesDMTDefaultFromEitherSurface pins DMT's historical
+// config.yaml default after any WebUI session default has had precedence.
+func TestRunWithoutAConfigUsesDMTDefaultFromEitherSurface(t *testing.T) {
 	var output, errors bytes.Buffer
 	code := Run([]string{"run"}, &output, &errors)
-	if code != ConfigurationError {
+	if code != FileError {
 		t.Fatalf("command line exit code = %d", code)
 	}
-	if !bytes.Contains(errors.Bytes(), []byte("usage: dmtx run")) {
+	if !bytes.Contains(errors.Bytes(), []byte("config.yaml")) {
 		t.Fatalf("command line said %q", errors.String())
 	}
 
 	outcome := Execute(context.Background(), Request{Command: "run"})
-	if outcome.ExitCode != ConfigurationError {
+	if outcome.ExitCode != FileError {
 		t.Fatalf("seam exit code = %d, messages = %v", outcome.ExitCode, outcome.Messages)
 	}
-	if len(outcome.Messages) != 1 || outcome.Messages[0].Text != runUsage {
+	if len(outcome.Messages) != 1 || !strings.Contains(outcome.Messages[0].Text, "config.yaml") {
 		t.Fatalf("seam said %v", outcome.Messages)
 	}
 }
@@ -147,16 +142,11 @@ func TestRunWithoutAConfigAnswersUsageFromEitherSurface(t *testing.T) {
 func TestRunUsageIsOneString(t *testing.T) {
 	var output, parserErrors bytes.Buffer
 	Run([]string{"run", "--nonsense"}, &output, &parserErrors)
-	executorOutcome := Execute(context.Background(), Request{Command: "run"})
-
-	if len(executorOutcome.Messages) != 1 {
-		t.Fatalf("executor messages = %v", executorOutcome.Messages)
-	}
-	if parserErrors.String() != executorOutcome.Messages[0].Text+"\n" {
+	if !strings.Contains(parserErrors.String(), runUsage+"\n") ||
+		!strings.Contains(parserErrors.String(), "unknown flag --nonsense") {
 		t.Fatalf(
-			"parser said %q, executor said %q",
+			"parser did not pair its specific error with canonical usage: parser %q",
 			parserErrors.String(),
-			executorOutcome.Messages[0].Text,
 		)
 	}
 }

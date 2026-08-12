@@ -7,6 +7,9 @@ func TestWebUISupportMatrix(t *testing.T) {
 		"run": true, "resume": true, "status": true, "history": true,
 		"validate": true, "diagnose": true, "preflight": true, "analyze": true,
 		"init": true, "init-secrets": true, "config": true, "profile": true,
+		"ai": true, "setup": true, "session": true, "logs": true,
+		"about": true, "help": true,
+		"clear": true, "quit": true,
 	}
 	for _, command := range Commands {
 		if !supported[command.Name] {
@@ -14,15 +17,6 @@ func TestWebUISupportMatrix(t *testing.T) {
 		}
 		if command.WebUI != Supported {
 			t.Errorf("%s is WebUI %q, want supported", command.Name, command.WebUI)
-		}
-	}
-	for _, name := range []string{"ai", "setup"} {
-		command, ok := Resolve(name)
-		if !ok {
-			t.Fatalf("missing registered command %q", name)
-		}
-		if command.WebUI != Planned {
-			t.Errorf("unfinished command %s is WebUI %q, want planned", name, command.WebUI)
 		}
 	}
 }
@@ -45,6 +39,22 @@ func TestHealthCheckAliasIsRegistered(t *testing.T) {
 		}
 	}
 	t.Fatal("preflight must retain the health-check alias")
+}
+
+func TestWizardIsNotAliasedToSetup(t *testing.T) {
+	wizard, ok := Resolve("wizard")
+	if !ok || wizard.WebUI != Omitted || wizard.Note == "" {
+		t.Fatalf("wizard disposition = %+v, want explicit omitted editor-mode explanation", wizard)
+	}
+	setup, ok := Resolve("setup")
+	if !ok {
+		t.Fatal("setup is missing")
+	}
+	for _, alias := range setup.Aliases {
+		if alias == "wizard" {
+			t.Fatal("wizard must not be a setup alias")
+		}
+	}
 }
 
 // TestValidRejectsEachBrokenInvariant feeds the validator registries that break

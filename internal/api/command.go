@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -37,8 +39,11 @@ func RunCommand(args []string, stdout, stderr io.Writer) int {
 	options.Root = completionRoot(options)
 	path, pathErr := statePath()
 	// Beside serve.json, in the directory dmtx already keeps its own state in.
+	// Both files are namespaced by the served root: a remembered state path is
+	// meaningful only for the project that selected it.
 	if pathErr == nil {
-		options.SessionPath = filepath.Join(filepath.Dir(path), "session.json")
+		options.SessionPath = consoleSessionPath(filepath.Dir(path), options.Root)
+		options.DefaultStatePath = consoleStatePath(options.SessionPath, options.Root)
 	}
 
 	// A server is already running unless proven otherwise. Starting a second
@@ -123,6 +128,37 @@ func RunCommand(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "dmtx stopped after %s without a request.\n", options.IdleTimeout)
 	}
 	return success
+}
+
+// consoleProjectID is a stable opaque name for a served project. Keeping paths
+// outside the project tree avoids an untracked workspace write from /history;
+// keying them by root prevents a project B console from inheriting project A's
+// selected state path. The absolute path makes --root . and its absolute
+// spelling agree.
+func consoleProjectID(root string) string {
+	resolved, err := filepath.Abs(root)
+	if err == nil {
+		root = resolved
+	}
+	digest := sha256.Sum256([]byte(filepath.Clean(root)))
+	return hex.EncodeToString(digest[:8])
+}
+
+// consoleSessionPath keeps mutable console defaults separate for every served
+// project. A global session.json would make the last state used by one project
+// silently win over another project's fallback.
+func consoleSessionPath(directory, root string) string {
+	return filepath.Join(directory, "session-"+consoleProjectID(root)+".json")
+}
+
+// consoleStatePath keeps the fresh-console fallback state beside its
+// project-scoped session file. The state has the same root identity so it
+// cannot overlap another project's fallback database.
+func consoleStatePath(sessionPath, root string) string {
+	return filepath.Join(
+		filepath.Dir(sessionPath),
+		"console-"+consoleProjectID(root)+".state.db",
+	)
 }
 
 // completionRoot decides which directory @ completion may enumerate.

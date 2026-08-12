@@ -21,12 +21,13 @@ package app
 // SQLite for everything else, so the example shows the thing --state is for:
 // naming a state file the default would not have produced. An example matching
 // the default would demonstrate only what happens without the flag.
-const runUsage = "usage: dmtx run (--config migration.yaml | --profile NAME) " +
-	"[--state migration.state.yaml] [--dry-run] [--acknowledge-destructive]"
+const runUsage = "usage: dmtx run [CONFIG | @CONFIG | --config CONFIG | --profile NAME] " +
+	"[--state PATH] [--source-schema NAME] [--target-schema NAME] [--workers N] " +
+	"[--skip-preflight LIST|all] [--dry-run] [--acknowledge-destructive | --confirm-backup]"
 
-const resumeUsage = "usage: dmtx resume (--config migration.yaml | --profile NAME) " +
-	"[--state migration.state.yaml] [--acknowledge-destructive] " +
-	"[--force-resume] [--abandon --abandon-reason TEXT]"
+const resumeUsage = "usage: dmtx resume [CONFIG | @CONFIG | --config CONFIG | --profile NAME] " +
+	"[--state PATH] [--acknowledge-destructive] " +
+	"[--force-resume] [--skip-preflight LIST|all] [--abandon --abandon-reason TEXT]"
 
 // runOptions is what a run acts on, however it was asked for.
 type runOptions struct {
@@ -35,17 +36,29 @@ type runOptions struct {
 	statePath               string
 	dryRun                  bool
 	destructiveAcknowledged bool
+	sourceSchema            string
+	targetSchema            string
+	workers                 int
+	skipPreflight           string
 }
 
 // runOptionsFrom builds the options from a Request rather than argv, so a
 // surface with no command line gets the same defaults the command line gets.
 func runOptionsFrom(request Request) (runOptions, bool) {
+	configPath := request.ConfigPath
+	if configPath == "" && request.ProfileName == "" {
+		configPath = "config.yaml"
+	}
 	return validRunOptions(runOptions{
-		configPath:              request.ConfigPath,
+		configPath:              configPath,
 		profileName:             request.ProfileName,
 		statePath:               request.StatePath,
 		dryRun:                  request.DryRun,
 		destructiveAcknowledged: request.AcknowledgeDestructive,
+		sourceSchema:            request.SourceSchema,
+		targetSchema:            request.TargetSchema,
+		workers:                 request.Workers,
+		skipPreflight:           request.SkipPreflight,
 	})
 }
 

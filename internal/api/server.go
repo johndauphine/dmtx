@@ -54,6 +54,13 @@ type Options struct {
 	// memory only, which is what a caller that is not the serve command wants.
 	SessionPath string
 
+	// DefaultStatePath is the WebUI's project-scoped SQLite state when neither
+	// the typed request nor the session names one. It lets a fresh bare
+	// /history or /status report an empty state before a console job selects its
+	// actual state database. Empty preserves the API embedding behaviour of
+	// requiring an explicit state path or a session default.
+	DefaultStatePath string
+
 	// Root confines @ path completion. Empty disables completion rather than
 	// widening it: an endpoint that enumerates the filesystem is worth having
 	// only when someone has said which part of it.
@@ -84,6 +91,11 @@ type Server struct {
 	// every command. Held here rather than in internal/app because the command
 	// line deliberately does not consult them.
 	defaults *sessionDefaults
+
+	// defaultStatePath is the project-scoped WebUI fallback after a session
+	// default. It stays separate from session.json so a fresh fallback is not
+	// mistaken for an operator-selected state on a later console restart.
+	defaultStatePath string
 
 	// jobs holds every command this server has started. Commands run here
 	// rather than inside a handler so that losing the client does not lose the
@@ -159,6 +171,7 @@ func New(options Options) (*Server, error) {
 	}
 	server.jobs = newJobs(&server.activity)
 	server.defaults = newSessionDefaults(options.SessionPath)
+	server.defaultStatePath = options.DefaultStatePath
 
 	// Started now rather than left at the zero time, or a server that has not
 	// yet had its first request would look infinitely idle and the watchdog

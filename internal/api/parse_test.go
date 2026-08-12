@@ -183,11 +183,14 @@ func TestParseAgreesWithTheCommandLine(t *testing.T) {
 
 	for _, line := range []string{
 		"run --config m.yaml",
+		"run @m.yaml --state=other.state.db --confirm-backup",
 		"run --config m.yaml --dry-run",
 		"run --config m.yaml --state other.state.db --acknowledge-destructive",
 		"status --state m.yaml.state.db",
 		"history --state m.yaml.state.db",
+		"history @m.yaml --run=abc",
 		"validate --config m.yaml",
+		"validate @m.yaml",
 		"diagnose --state m.yaml.state.db --run abc",
 		// Quoted, because the reason is two words - which is the whole
 		// argument for tokenising in Go rather than splitting on spaces in
@@ -197,6 +200,9 @@ func TestParseAgreesWithTheCommandLine(t *testing.T) {
 		"preflight --config m.yaml",
 		"health-check --config m.yaml",
 		"init --config m.yaml --force",
+		"init --config=m.yaml --force",
+		"profile save prod @m.yaml",
+		`ai runbook @m.yaml --timeout=90s --request "focus on indexes"`,
 	} {
 		t.Run(line, func(t *testing.T) {
 			body := parseLine(t, server, line)
@@ -211,6 +217,10 @@ func TestParseAgreesWithTheCommandLine(t *testing.T) {
 			if !dispatched {
 				t.Fatalf("app.ParseRequest(%q) did not dispatch", words)
 			}
+			// The route applies the same command-level config.yaml fallback
+			// after its (empty in this test) session defaults. Compare the
+			// executable request, not the pre-default parser intermediate.
+			want = app.ApplyCommandDefaults(want)
 			if body.Request != want {
 				t.Fatalf("route parsed %+v, command line parsed %+v", body.Request, want)
 			}
@@ -333,7 +343,6 @@ func TestParseRefusesFlagMistakesTheCommandLineRefuses(t *testing.T) {
 	}{
 		{"run repeats a flag", "run --config a.yaml --config b.yaml"},
 		{"run has an unknown flag", "run --config a.yaml --wat"},
-		{"run has no config", "run"},
 		{"diagnose has a misspelled flag", "diagnose --state s.db --ruun abc"},
 		{"diagnose repeats a flag", "diagnose --state a.db --state b.db"},
 		{"resume abandons with no reason", "resume --config m.yaml --abandon"},
@@ -376,6 +385,21 @@ func TestParseAppliesSessionDefaults(t *testing.T) {
 	body = parseLine(t, server, "validate --config typed.yaml")
 	if body.Request.ConfigPath != "typed.yaml" {
 		t.Fatalf("config path = %q, want the typed path", body.Request.ConfigPath)
+	}
+
+	// A typed profile is also explicit and must suppress the remembered
+	// config, matching DMT's origin precedence.
+	body = parseLine(t, server, "validate --profile=prod")
+	if body.Request.ProfileName != "prod" || body.Request.ConfigPath != "" {
+		t.Fatalf("profile origin was made ambiguous by defaults: %+v", body.Request)
+	}
+
+	// With no session origin, the parsed line shows DMT's config.yaml default
+	// rather than an unresolved blank that execution would later change.
+	server = newTestServer(t)
+	body = parseLine(t, server, "run")
+	if !body.Dispatched || body.Request.ConfigPath != "config.yaml" {
+		t.Fatalf("bare run default = %+v", body)
 	}
 }
 

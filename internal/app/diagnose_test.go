@@ -87,6 +87,74 @@ func TestDiagnoseCanBePointedAtARun(t *testing.T) {
 	}
 }
 
+func TestSelectRunToDiagnoseUsesLatestTransitionForEachRun(t *testing.T) {
+	for _, suffix := range []string{".db", ".yaml"} {
+		t.Run(suffix, func(t *testing.T) {
+			store, err := state.NewBackend(filepath.Join(t.TempDir(), "migration.state"+suffix))
+			if err != nil {
+				t.Fatalf("create state backend: %v", err)
+			}
+			started := time.Now().UTC().Add(-time.Hour)
+			for _, run := range []state.Run{
+				{ID: "completed", Outcome: state.Running, Resumable: true, StartedAt: started},
+				{ID: "completed", Outcome: state.Success, StartedAt: started, EndedAt: started.Add(time.Minute)},
+			} {
+				if err := store.Append(run); err != nil {
+					t.Fatalf("append %s/%s: %v", run.ID, run.Outcome, err)
+				}
+			}
+
+			run, found, err := selectRunToDiagnose(store, "")
+			if err != nil {
+				t.Fatalf("select completed run: %v", err)
+			}
+			if !found || run.ID != "completed" || run.Outcome != state.Success {
+				t.Errorf("selected %+v, found %t; want latest completed transition", run, found)
+			}
+
+			run, found, err = selectRunToDiagnose(store, "completed")
+			if err != nil {
+				t.Fatalf("select completed run explicitly: %v", err)
+			}
+			if !found || run.Outcome != state.Success {
+				t.Errorf("explicit selection returned %+v, found %t; want success", run, found)
+			}
+		})
+	}
+}
+
+func TestSelectRunToDiagnoseChoosesMostRecentLatestFailure(t *testing.T) {
+	for _, suffix := range []string{".db", ".yaml"} {
+		t.Run(suffix, func(t *testing.T) {
+			store, err := state.NewBackend(filepath.Join(t.TempDir(), "migration.state"+suffix))
+			if err != nil {
+				t.Fatalf("create state backend: %v", err)
+			}
+			started := time.Now().UTC().Add(-time.Hour)
+			for _, run := range []state.Run{
+				{ID: "old-failure", Outcome: state.Running, Resumable: true, StartedAt: started},
+				{ID: "old-failure", Outcome: state.Failed, Resumable: true, StartedAt: started, EndedAt: started.Add(time.Minute)},
+				{ID: "selected", Outcome: state.Running, Resumable: true, StartedAt: started.Add(2 * time.Minute)},
+				{ID: "selected", Outcome: state.Partial, Resumable: true, StartedAt: started.Add(2 * time.Minute), EndedAt: started.Add(3 * time.Minute)},
+				{ID: "later-success", Outcome: state.Running, Resumable: true, StartedAt: started.Add(4 * time.Minute)},
+				{ID: "later-success", Outcome: state.Success, StartedAt: started.Add(4 * time.Minute), EndedAt: started.Add(5 * time.Minute)},
+			} {
+				if err := store.Append(run); err != nil {
+					t.Fatalf("append %s/%s: %v", run.ID, run.Outcome, err)
+				}
+			}
+
+			run, found, err := selectRunToDiagnose(store, "")
+			if err != nil {
+				t.Fatalf("select latest failed run: %v", err)
+			}
+			if !found || run.ID != "selected" || run.Outcome != state.Partial {
+				t.Errorf("selected %+v, found %t; want selected/partial", run, found)
+			}
+		})
+	}
+}
+
 // TestDiagnoseCountsWhatSurvivesAResume pins the tally, which is the number an
 // operator actually wants: how much of the work is already done.
 func TestDiagnoseCountsWhatSurvivesAResume(t *testing.T) {
@@ -184,13 +252,17 @@ func TestDiagnoseRefusesFlagsItDoesNotKnow(t *testing.T) {
 	if _, ok := diagnoseArguments([]string{"--state", "s.db", "--run", "abc"}); !ok {
 		t.Fatal("diagnose refused its own flags")
 	}
+	if request, ok := diagnoseArguments([]string{"@migration.yaml", "--run=abc"}); !ok {
+		t.Fatal("diagnose refused DMT positional config syntax")
+	} else if request.ConfigPath != "migration.yaml" || request.StatePath != "migration.yaml.state.db" || request.RunID != "abc" {
+		t.Fatalf("diagnose positional request = %+v", request)
+	}
 	for _, refused := range [][]string{
 		{"--state", "s.db", "--ruun", "abc"},
 		{"--state"},
 		{"--state", "s.db", "--run"},
 		{"--state", "s.db", "--state", "other.db"},
-		{"s.db"},
-		{"--state", "s.db", "extra"},
+		{"one.yaml", "two.yaml"},
 	} {
 		if _, ok := diagnoseArguments(refused); ok {
 			t.Errorf("diagnose accepted %v", refused)

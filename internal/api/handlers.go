@@ -32,7 +32,7 @@ func (server *Server) execute(writer http.ResponseWriter, request *http.Request)
 	// means the synchronous and streaming surfaces cannot drift into deciding
 	// things differently - and it is what stops a closed tab from killing a
 	// migration, because the job's context is not this request's.
-	running, err := server.jobs.start(decoded)
+	running, err := server.start(decoded)
 	if err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{
 			"error": "could not start the command",
@@ -82,10 +82,10 @@ func (server *Server) decodeRequest(
 		})
 		return app.Request{}, false
 	}
-	// Session defaults fill in what the request did not say, and only here.
+	// Console defaults fill in what the request did not say, and only here.
 	// The command line resolves its own arguments and never consults these, so
 	// a destructive command typed in a terminal always names what it acts on.
-	return server.defaults.applyTo(decoded), true
+	return server.applyDefaults(decoded), true
 }
 
 // commands reports the command registry, so a front end can build its own

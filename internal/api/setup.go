@@ -23,16 +23,29 @@ type setupState struct {
 // allowing two half-completed configurations to interleave.
 func (server *Server) setupStart(writer http.ResponseWriter, request *http.Request) {
 	var asked struct {
-		ConfigPath string `json:"config_path"`
-		Engine     string `json:"engine"`
+		ConfigPath  string `json:"config_path"`
+		Engine      string `json:"engine"`
+		ProfileName string `json:"profile_name"`
 	}
 	if !decodeSetupRequest(writer, request, &asked) {
 		return
 	}
-	flow, err := app.NewSetupForEngine(asked.ConfigPath, asked.Engine)
+	if asked.ProfileName != "" && asked.ConfigPath != "" {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": "choose a configuration path or profile, not both",
+		})
+		return
+	}
+	var flow app.SetupFlow
+	var err error
+	if asked.ProfileName != "" {
+		flow, err = app.NewSetupForProfile(asked.ProfileName, "", asked.Engine)
+	} else {
+		flow, err = app.NewSetupForEngine(asked.ConfigPath, asked.Engine)
+	}
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
-			"error": "unsupported setup engine",
+			"error": "could not start setup",
 		})
 		return
 	}

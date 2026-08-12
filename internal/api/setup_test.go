@@ -123,3 +123,14 @@ func TestSetupAPIAcceptsPostgresWorkflow(t *testing.T) {
 		t.Fatalf("postgres start prompt = %+v", prompt)
 	}
 }
+
+func TestSetupAPIRejectsAmbiguousProfileAndConfigPath(t *testing.T) {
+	server := newTestServer(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/start", strings.NewReader(`{"profile_name":"saved","config_path":"saved.yaml"}`))
+	request.Header.Set("Authorization", "Bearer "+server.auth.session)
+	recorder := httptest.NewRecorder()
+	server.routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("ambiguous profile setup = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}

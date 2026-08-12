@@ -136,8 +136,14 @@ func TestRequestWireShape(t *testing.T) {
 		StatePath:              "s",
 		ProfileName:            "p",
 		ProfileAction:          "save",
+		OutputPath:             "export.yaml",
 		DryRun:                 true,
 		AcknowledgeDestructive: true,
+		SourceSchema:           "source_schema",
+		TargetSchema:           "target_schema",
+		Workers:                2,
+		SkipPreflight:          "source.connectivity",
+		Detailed:               true,
 		Latest:                 true,
 		ForceResume:            true,
 		Abandon:                true,
@@ -149,16 +155,56 @@ func TestRequestWireShape(t *testing.T) {
 		"acknowledge_destructive",
 		"command",
 		"config_path",
+		"detailed",
 		"dry_run",
 		"force_resume",
 		"latest",
+		"output_path",
 		"profile_action",
 		"profile_name",
+		"skip_preflight",
+		"source_schema",
 		"state_path",
+		"target_schema",
+		"workers",
 	})
 }
 
-// TestResultPayloadWireShape pins what run, resume, and validate report.
+// TestStatusDetailPayloadWireShape pins the task-level status response. The
+// lease owner token is deliberately absent because executeShowState calls
+// publicRun before putting the record on this public surface.
+func TestStatusDetailPayloadWireShape(t *testing.T) {
+	integer, rowNumber := int64(1), int64(2)
+	payload := struct {
+		Run   state.Run    `json:"run"`
+		Tasks []state.Task `json:"tasks"`
+	}{
+		Run:   publicRun(state.Run{LeaseOwnerToken: "must not leak"}),
+		Tasks: []state.Task{{IntegerWatermark: &integer, RowNumberWatermark: &rowNumber}},
+	}
+	assertWireShape(t, "status detail", payload, []string{
+		"run",
+		"run.ended_at",
+		"run.id",
+		"run.outcome",
+		"run.resumability_reason",
+		"run.resumable",
+		"run.source",
+		"run.started_at",
+		"run.target",
+		"tasks",
+		"tasks[].completed_at",
+		"tasks[].integer_watermark",
+		"tasks[].row_number_watermark",
+		"tasks[].rows_done",
+		"tasks[].run_id",
+		"tasks[].started_at",
+		"tasks[].status",
+		"tasks[].table",
+	})
+}
+
+// TestResultPayloadWireShape pins what run and resume report.
 //
 // RuntimeTuning is populated deliberately. It carries omitempty, so a zero
 // Result omits it entirely and a golden list built from one would never pin it -
@@ -167,6 +213,22 @@ func TestRequestWireShape(t *testing.T) {
 // must be present in the fixture.
 func TestResultPayloadWireShape(t *testing.T) {
 	assertWireShape(t, "migrate.Result", resultFixture(), resultWireFields)
+}
+
+// TestValidationResultPayloadWireShape pins the distinct, table-level result
+// produced by validate. It must not share PayloadResult with run or resume:
+// although both values have a tables field, their JSON shapes are unrelated.
+func TestValidationResultPayloadWireShape(t *testing.T) {
+	assertWireShape(t, "migrate.ValidationResult", migrate.ValidationResult{
+		Tables: []migrate.ValidationFinding{{}},
+	}, []string{
+		"passed",
+		"tables",
+		"tables[].match",
+		"tables[].source_rows",
+		"tables[].table",
+		"tables[].target_rows",
+	})
 }
 
 // resultFixture returns a Result with every optional field populated, including
@@ -245,16 +307,18 @@ func TestRunPayloadWireShapeExcludesSecrets(t *testing.T) {
 // would then pass while the new shape went unpinned, proving nothing.
 func TestEveryPayloadKindIsPinned(t *testing.T) {
 	pinned := map[string]string{
-		PayloadResult:          "TestResultPayloadWireShape",
-		PayloadPartialResult:   "TestPartialResultPayloadWireShape",
-		PayloadResumeResponse:  "TestResumeAbandonmentPayloadWireShape",
-		PayloadRun:             "TestRunPayloadWireShapeExcludesSecrets",
-		PayloadRuns:            "TestRunPayloadWireShapeExcludesSecrets (same element shape)",
-		PayloadPlan:            "migrate.Plan, pinned by its own package",
-		PayloadPreflightReport: "productionPreflightReport, pinned by preflight tests",
-		PayloadConfig:          "TestConfigPayloadWireShapeExcludesSecrets",
-		PayloadDiagnosis:       "TestDiagnosisPayloadWireShape",
-		PayloadAnalysis:        "TestAnalysisPayloadWireShape",
+		PayloadResult:           "TestResultPayloadWireShape",
+		PayloadValidationResult: "TestValidationResultPayloadWireShape",
+		PayloadPartialResult:    "TestPartialResultPayloadWireShape",
+		PayloadResumeResponse:   "TestResumeAbandonmentPayloadWireShape",
+		PayloadRun:              "TestRunPayloadWireShapeExcludesSecrets",
+		PayloadRuns:             "TestRunPayloadWireShapeExcludesSecrets (same element shape)",
+		PayloadPlan:             "migrate.Plan, pinned by its own package",
+		PayloadPreflightReport:  "productionPreflightReport, pinned by preflight tests",
+		PayloadConfig:           "TestConfigPayloadWireShapeExcludesSecrets",
+		PayloadDiagnosis:        "TestDiagnosisPayloadWireShape",
+		PayloadAnalysis:         "TestAnalysisPayloadWireShape",
+		PayloadStatusDetail:     "TestStatusDetailPayloadWireShape",
 	}
 
 	fileSet := token.NewFileSet()
