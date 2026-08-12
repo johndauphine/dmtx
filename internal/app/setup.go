@@ -70,7 +70,7 @@ func NewSetup(configPath string) *Setup {
 // a new owner-only YAML file and never silently mutates the encrypted profile.
 func newSetupFromConfig(configPath string, cfg config.Config) (*Setup, error) {
 	if cfg.Source.Type != "sqlite" || cfg.Target.Type != "sqlite" {
-		return nil, errors.New("profile is not a SQLite-to-SQLite configuration")
+		return nil, newSetupStartError("saved profile is not a SQLite-to-SQLite configuration")
 	}
 	setup := NewSetup(configPath)
 	setup.sourcePath = cfg.Source.Database

@@ -24,6 +24,26 @@ type SetupFlow interface {
 	Input(string) SetupPrompt
 }
 
+type setupStartError struct{ message string }
+
+func (err *setupStartError) Error() string { return err.message }
+
+func newSetupStartError(message string) error {
+	return &setupStartError{message: message}
+}
+
+// SetupStartErrorMessage returns only errors deliberately classified as safe
+// for an authenticated operator. Storage, filesystem, parser, and driver errors
+// are otherwise collapsed so a future internal error cannot accidentally leak
+// paths or protected configuration details through the setup API.
+func SetupStartErrorMessage(err error) string {
+	var safe *setupStartError
+	if errors.As(err, &safe) {
+		return safe.Error()
+	}
+	return "could not start setup"
+}
+
 // NewSetupForEngine selects a supported setup workflow in the application.
 func NewSetupForEngine(configPath, engineName string) (SetupFlow, error) {
 	switch strings.ToLower(strings.TrimSpace(engineName)) {
@@ -32,7 +52,7 @@ func NewSetupForEngine(configPath, engineName string) (SetupFlow, error) {
 	case "postgres", "postgresql":
 		return NewPostgresSetup(configPath), nil
 	default:
-		return nil, errors.New("unsupported setup engine")
+		return nil, newSetupStartError("unsupported setup engine; choose sqlite or postgres")
 	}
 }
 
@@ -42,13 +62,20 @@ func NewSetupForEngine(configPath, engineName string) (SetupFlow, error) {
 // the setup prompts or output secret files.
 func NewSetupForProfile(profileName, configPath, engineName string) (SetupFlow, error) {
 	if strings.TrimSpace(profileName) == "" {
-		return nil, errors.New("profile name is required")
+		return nil, newSetupStartError("profile name is required")
 	}
 	data, _, err := configurationData(Request{ProfileName: profileName})
 	if err != nil {
-		return nil, err
+		return nil, profileSetupLoadError(err)
 	}
 	return newSetupForProfileData(profileName, configPath, engineName, data)
+}
+
+func profileSetupLoadError(err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return newSetupStartError("saved profile was not found")
+	}
+	return newSetupStartError("profile storage is unavailable; initialise secrets and save the profile first")
 }
 
 // newSetupForProfileData keeps profile decryption at the boundary while making
@@ -56,11 +83,11 @@ func NewSetupForProfile(profileName, configPath, engineName string) (SetupFlow, 
 // caller's real protected profile directory.
 func newSetupForProfileData(profileName, configPath, engineName string, data []byte) (SetupFlow, error) {
 	if strings.TrimSpace(profileName) == "" {
-		return nil, errors.New("profile name is required")
+		return nil, newSetupStartError("profile name is required")
 	}
 	cfg, err := config.Parse(data)
 	if err != nil {
-		return nil, err
+		return nil, newSetupStartError("saved profile contains an invalid configuration")
 	}
 	if strings.TrimSpace(configPath) == "" {
 		configPath = profileName + ".yaml"
@@ -75,7 +102,7 @@ func newSetupForProfileData(profileName, configPath, engineName string, data []b
 	case "postgres", "postgresql":
 		return newPostgresSetupFromConfig(configPath, cfg)
 	default:
-		return nil, errors.New("profile uses an unsupported setup engine")
+		return nil, newSetupStartError("saved profile uses an unsupported setup engine")
 	}
 }
 
@@ -136,7 +163,7 @@ func newPostgresSetup(configPath string, verify postgresSetupVerifier) *Postgres
 // can never turn into a browser-visible password default.
 func newPostgresSetupFromConfig(configPath string, cfg config.Config) (*PostgresSetup, error) {
 	if cfg.Source.Type != "postgres" || cfg.Target.Type != "postgres" {
-		return nil, errors.New("profile is not a PostgreSQL-to-PostgreSQL configuration")
+		return nil, newSetupStartError("saved profile is not a PostgreSQL-to-PostgreSQL configuration")
 	}
 	setup := NewPostgresSetup(configPath)
 	setup.source, setup.target = cfg.Source, cfg.Target

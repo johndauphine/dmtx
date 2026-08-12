@@ -124,6 +124,40 @@ func TestAtomicWrite0600ReplacesContents(t *testing.T) {
 	}
 }
 
+func TestWriteProtectedFileRefusesSymlinkAndNonRegularDestinations(t *testing.T) {
+	directory := t.TempDir()
+	t.Run("symlink", func(t *testing.T) {
+		target := filepath.Join(directory, "target.yaml")
+		if err := os.WriteFile(target, []byte("original"), fileMode); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(directory, "export.yaml")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := WriteProtectedFile(link, []byte("decrypted-profile")); err == nil {
+			t.Fatal("symlink destination was accepted")
+		}
+		got, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "original" {
+			t.Fatalf("symlink target changed to %q", got)
+		}
+	})
+
+	t.Run("directory", func(t *testing.T) {
+		nonRegular := filepath.Join(directory, "existing-directory")
+		if err := os.Mkdir(nonRegular, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteProtectedFile(nonRegular, []byte("decrypted-profile")); err == nil {
+			t.Fatal("non-regular destination was accepted")
+		}
+	})
+}
+
 func TestAtomicWrite0600DoesNotExposeDataInErrors(t *testing.T) {
 	err := atomicWrite0600(filepath.Join(t.TempDir(), "missing", "config.yaml"), []byte("super-secret"))
 	if err == nil {

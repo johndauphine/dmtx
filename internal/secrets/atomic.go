@@ -28,6 +28,27 @@ var defaultAtomicOps = atomicOps{
 	remove: os.Remove,
 }
 
+// WriteProtectedFile atomically creates or replaces an owner-only regular
+// file. Existing symlinks and non-regular files are refused before any bytes
+// are written. The replacement itself is a rename, so a destination changed
+// after the check is replaced as a directory entry rather than followed.
+//
+// This is exported for other packages that deliberately materialise sensitive
+// data, such as an explicitly requested plaintext profile export. Callers must
+// still decide whether writing the data is allowed in the first place.
+func WriteProtectedFile(path string, data []byte) error {
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refuse protected file destination %q: existing path is not a regular file", path)
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("inspect protected file destination %q: %w", path, err)
+	}
+	return atomicWrite0600(path, data)
+}
+
 // atomicWrite0600 replaces path only after the replacement has been fully
 // written, synced, closed, and restricted. Its errors name the operation,
 // never the bytes.

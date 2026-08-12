@@ -45,7 +45,7 @@ func (server *Server) setupStart(writer http.ResponseWriter, request *http.Reque
 	}
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
-			"error": "could not start setup",
+			"error": app.SetupStartErrorMessage(err),
 		})
 		return
 	}

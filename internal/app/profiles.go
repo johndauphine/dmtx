@@ -155,17 +155,5 @@ func executeProfileWithStore(
 // which sealed profile bytes are allowed back onto disk; never loosen the file
 // simply because a prior file at the path had looser permissions.
 func writeProtectedProfileExport(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return err
-	}
-	return file.Close()
+	return secrets.WriteProtectedFile(path, data)
 }

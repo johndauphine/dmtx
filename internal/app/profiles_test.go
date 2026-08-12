@@ -133,6 +133,9 @@ func TestProfileExportWritesOwnerOnlyPlaintext(t *testing.T) {
 	}
 
 	output := filepath.Join(t.TempDir(), "portable.yaml")
+	if err := os.WriteFile(output, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result := executeProfileWithStore(newOutcome("profile"), Request{
 		Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: output,
 	}, open)

@@ -77,6 +77,23 @@ func TestPostgresSetupUsesProtectedPasswordOrigins(t *testing.T) {
 	}
 }
 
+func TestSetupStartErrorMessagesAreActionableAndRedacted(t *testing.T) {
+	_, err := NewSetupForEngine("", "oracle")
+	if got := SetupStartErrorMessage(err); got != "unsupported setup engine; choose sqlite or postgres" {
+		t.Fatalf("unsupported engine message = %q", got)
+	}
+	if got := SetupStartErrorMessage(profileSetupLoadError(sql.ErrNoRows)); got != "saved profile was not found" {
+		t.Fatalf("missing profile message = %q", got)
+	}
+	if got := SetupStartErrorMessage(errors.New("private-path-sentinel")); got != "could not start setup" {
+		t.Fatalf("unexpected error was exposed as %q", got)
+	}
+	_, err = newSetupForProfileData("saved", "", "", []byte("private-value-sentinel: ["))
+	if got := SetupStartErrorMessage(err); got != "saved profile contains an invalid configuration" || strings.Contains(got, "sentinel") {
+		t.Fatalf("invalid profile message = %q", got)
+	}
+}
+
 func TestPostgresSetupFromProfileNeverReflectsPassword(t *testing.T) {
 	setup, err := newPostgresSetupFromConfig("saved.yaml", config.Config{
 		Source:    config.Endpoint{Type: "postgres", Host: "source.example", Port: 5433, Database: "source", User: "reader", Password: "source-sentinel"},
