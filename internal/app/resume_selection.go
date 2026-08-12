@@ -44,11 +44,6 @@ func validResumeOptions(options resumeOptions) (resumeOptions, bool) {
 	return options, true
 }
 
-func resumeArguments(args []string) (resumeOptions, bool) {
-	options, err := parseResumeArguments(args)
-	return options, err == nil
-}
-
 func latestRunForTarget(
 	store state.Backend,
 	target config.Endpoint,

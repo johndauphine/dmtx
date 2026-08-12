@@ -112,21 +112,6 @@ func (server *Server) commands(writer http.ResponseWriter, request *http.Request
 	writeJSON(writer, http.StatusOK, listed)
 }
 
-// placeholder stands in for the console until it exists. It is authenticated
-// like everything else so the auth path is exercised from the first request an
-// operator makes.
-func (server *Server) placeholder(writer http.ResponseWriter, request *http.Request) {
-	if request.URL.Path != "/" {
-		http.NotFound(writer, request)
-		return
-	}
-	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = writer.Write([]byte(
-		"dmtx is serving.\n\n" +
-			"The console is not built yet. The API is at POST /api/v1/execute.\n",
-	))
-}
-
 func writeJSON(writer http.ResponseWriter, status int, value any) {
 	// Encoded before the status is written, because WriteHeader commits the
 	// status permanently and nothing after it can take a 200 back.

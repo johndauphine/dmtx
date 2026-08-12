@@ -214,16 +214,6 @@ func refuseArguments(
 	return Request{}, out.failWith(ConfigurationError, message), false
 }
 
-func configOriginArguments(command string, args []string) (Request, bool) {
-	request, err := parseConfigOriginArguments(command, args)
-	return request, err == nil
-}
-
-func profileArguments(args []string) (Request, bool) {
-	request, err := parseProfileArguments(args)
-	return request, err == nil
-}
-
 // initArguments reads init's flags, refusing anything it does not know.
 func initArguments(args []string) (Request, bool) {
 	request, err := parseInitArguments(args)
@@ -789,14 +779,6 @@ func migrationExitCode(err error) int {
 		return ConfigurationError
 	}
 	return TransferError
-}
-
-// runArguments reads run's flags. The rules that are not about argv - a config
-// is required, and an unnamed state path is derived from it - belong to
-// validRunOptions, so the API reaches them too.
-func runArguments(args []string) (runOptions, bool) {
-	options, err := parseRunArguments(args)
-	return options, err == nil
 }
 
 // executeShowState serves both status and history; Latest distinguishes them.
