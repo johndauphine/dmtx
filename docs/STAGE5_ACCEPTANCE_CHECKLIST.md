@@ -29,8 +29,11 @@ completion or weaken Stage 5 parity, redaction, or release checks.
 
 ### 1. Command and application contract
 
-- [ ] Publish the final Stage 5 command matrix and closeout handoff with the
+- [x] Publish the final Stage 5 command matrix and closeout handoff with the
   accepted contract disposition. The matrix itself has no Planned commands.
+  They are published in [PR #43](https://github.com/johndauphine/dmtx/pull/43);
+  implementation commit `b09c540c206c5806fa0db8c0cd6fc867bb3e73e2`
+  passed both hosted Verify jobs.
 - [x] Review DMT domain commands against internal/contract; add a missing
   domain capability or record an approved explicit reduction. Browser-only
   shell actions may be UI chrome instead of application commands. The accepted
@@ -142,9 +145,12 @@ completion or weaken Stage 5 parity, redaction, or release checks.
   SQL Server 2022 TLS fixture. On 2026-08-12,
   `DMTX_STAGE4_LIVE_REQUIRED=1 go test ./internal/app -run TestMSSQLSetupLiveTLS -count=1 -v`
   verified both source and target connections and protected temporary output.
-- [ ] Publish docs/STAGE5_CLOSEOUT_HANDOFF.md with the accepted command matrix,
+- [x] Publish docs/STAGE5_CLOSEOUT_HANDOFF.md with the accepted command matrix,
   evidence, deliberate omissions, residual risks, and the exact Stage 6
-  boundary.
+  boundary. PR #43 is ready for review, and hosted workflow run
+  [31658869628](https://github.com/johndauphine/dmtx/actions/runs/31658869628)
+  passed its offline/browser/race and armed-live jobs for the immutable
+  implementation commit.
 
 ## Deliberate omissions
 

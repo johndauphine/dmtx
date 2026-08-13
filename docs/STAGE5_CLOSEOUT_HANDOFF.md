@@ -3,12 +3,15 @@
 ## Snapshot
 
 - Branch: `codex/stage5-closeout`
-- Repository HEAD when this handoff was updated:
-  `c005e5f7be79231a48fd6ca7f8ba39e30d8b21a3`
-- Working tree: intentionally uncommitted Stage 5 implementation and closeout
-  documentation changes; this handoff is evidence for review, not a release
-  declaration. The 2026-08-12 browser result exercised that uncommitted tree,
-  so no commit SHA uniquely identifies the tested contents.
+- Published implementation commit:
+  `b09c540c206c5806fa0db8c0cd6fc867bb3e73e2`
+- Review publication: [PR #43](https://github.com/johndauphine/dmtx/pull/43),
+  open and ready for review against `main`.
+- Hosted evidence: Verify workflow run
+  [31658869628](https://github.com/johndauphine/dmtx/actions/runs/31658869628)
+  passed `test` in 7m14s and `Armed live gate` in 6m42s for the implementation
+  commit. The final documentation-only evidence update must retain green PR
+  checks before merge.
 - Command matrix: [STAGE5_COMMAND_MATRIX.md](STAGE5_COMMAND_MATRIX.md)
 - Operator instructions: [STAGE5_WEBUI_OPERATIONS.md](STAGE5_WEBUI_OPERATIONS.md)
 
@@ -20,7 +23,7 @@
 | Encrypted profile persistence and portability | Focused tests cover encrypted store behavior, portable export/import round trip, owner-only output, tamper refusal, invalid import, and bounded/link-safe reads. The browser runner executes real read-only `/profile list` against one seeded entry in a temporary encrypted SQLite store. | Evidence collected; profile mutations/export/import are not browser-executed. |
 | Supported command behavior | Focused application/API tests cover every supported command, including `init-secrets` creation/refusal/permission behavior, browser-local command execution, setup state machines, and applicable cancellation paths. The real-browser runner checks shared-parser/default parity for every supported server command. | Evidence collected within the accepted Stage 5 contract; side-effecting provider commands are covered below the browser rather than executed against production-like systems from the UI fixture. |
 | AI and setup registered as supported | AI config-review parsing/execution and SQLite/PostgreSQL/SQL Server setup application/API tests exist. PostgreSQL and SQL Server setup use protected credential origins, required encrypted TLS, and verified source/target connections. PostgreSQL defaults to `ssl_mode=require`; SQL Server can validate the peer with a supplied CA file. | Evidence collected within the accepted Stage 5 scope. |
-| Real browser console interaction | The latest `go test -tags=browser ./internal/api -run TestBrowserConsoleControls -count=1` run passed with local Google Chrome on 2026-08-12. The controlled fixture uses temporary local state and encrypted profile storage, with no Docker or external migration DB. | Evidence collected; no commit SHA is claimed for the uncommitted tested tree. |
+| Real browser console interaction | `go test -tags=browser ./internal/api -run TestBrowserConsoleControls -count=1` passed with local Google Chrome on 2026-08-12. The hosted real-browser step then passed for commit `b09c540`. The controlled fixture uses temporary local state and encrypted profile storage, with no Docker or external migration DB. | Local and immutable hosted evidence collected. |
 | Discoverability, parse parity, completion, recall, PWA restrictions | Same real-browser runner verifies all supported registry spellings, slash/`@` completion, safe parse parity, local recall exclusions, active service-worker control, Chrome's CDP-parsed manifest, and the exact fixed Cache Storage entry set remaining unchanged after authenticated root/API fetches. It also verifies real profile-list rendering. | Evidence collected within fixture scope; no install-prompt click is claimed. |
 | Job behavior | `internal/api/job_test.go` covers client loss, cancellation, stream lifetime/status/recovery, retained events, and progress event shape. Browser runner covers reload/recovery and explicit cancellation. | Focused and full-suite evidence collected. |
 | Durable migration history vs browser recall | DMTX state stores provide durable run history used by `/history`; console recall is bounded browser-local storage; `/logs` is a session transcript. | Normative wording reconciled and implementation distinction recorded |
@@ -28,8 +31,8 @@
 | Loopback, authentication, SSH, idle/no-browser, PWA | Server/auth/idle/instance/UI tests and operations guide document the behavior; browser runner covers authenticated launch and PWA restrictions. Deterministic security tests cover failed-auth throttling; literal localhost/loopback Host validation with differing SSH local/remote ports; arbitrary DNS, non-loopback, and malformed Host rejection; absolute expiry; credential rotation after expiry; and a non-sliding pre-expiry handoff. | Evidence collected. |
 | Completion containment | `internal/api/completion_test.go` covers root confinement, symlink handling, special-file exclusion, auth, uniform refusal, and disabled completion. | Focused and full-suite evidence collected. |
 | Shipped-sink redaction | Behavioral sentinels exercise CLI text/JSON/progress renderers, synchronous API output, retained job status, replayed SSE progress/outcomes, console/setup/history protections, state, audit, AI, and portable profiles. Individual payload wire-shape tests protect structured schemas. `TestStage5CrossSurfaceRedactionEvidence` is only a drift guard that keeps those test declarations in the manifest; it is not treated as execution evidence. | Focused and full-suite evidence collected across every sink that ships in the accepted Stage 5 scope. |
-| CI formatting and browser gate | `verify.yml` fails on gofmt output and requires `/usr/bin/google-chrome` before running the isolated browser test. | Workflow change and local equivalent evidence collected; hosted CI result pending. |
-| Offline/race/static/live release gates | `test/fixtures/gate.sh --race` passed build, vet, offline tests/race, golangci-lint, Linux/Windows builds, fixture health/provisioning, and fully armed Stage 4 normal/race matrices on the current integrated working tree. Module hygiene, formatting, JS syntax, and real Chrome passed separately on the same tree. | Current-tree local evidence collected; immutable commit and hosted CI remain pending. |
+| CI formatting and browser gate | `verify.yml` fails on gofmt output and requires `/usr/bin/google-chrome` before running the isolated browser test. Hosted workflow run 31658869628 passed formatting, offline tests, vet, real Chrome, lint, race, and both platform builds. | Immutable hosted evidence collected for `b09c540`. |
+| Offline/race/static/live release gates | `test/fixtures/gate.sh --race` passed build, vet, offline tests/race, golangci-lint, Linux/Windows builds, fixture health/provisioning, and fully armed Stage 4 normal/race matrices on the final product tree. Module hygiene, formatting, JS syntax, and real Chrome passed separately. Hosted run 31658869628 also passed the PR-scoped armed normal live gate. | Local normal/live-race and immutable hosted normal-live evidence collected. |
 
 ## Exact commands recorded in this lane
 
@@ -67,9 +70,12 @@ DMTX_STAGE4_LIVE_REQUIRED=1 go test -race ./... -count=1 -timeout 30m
 ```
 
 The complete local gate reported `all checks passed`. It used all 16 armed
-endpoint variables and five healthy, freshly provisioned TLS fixtures. It ran
-against the uncommitted working tree, so formal publication still needs an
-immutable commit and hosted workflow result; no commit SHA is claimed here.
+endpoint variables and five healthy, freshly provisioned TLS fixtures. Its
+product code is the code published in `b09c540`; only the resulting evidence
+timings were written into the handoff afterward. That implementation commit
+then passed both jobs in hosted workflow run 31658869628. The PR workflow runs
+the armed normal suite; the armed live-race result above is local evidence and
+the workflow repeats that expensive half on schedule or manual dispatch.
 
 The browser command found and used:
 
@@ -104,9 +110,9 @@ Stage 5 UI/auth/redaction contract.
   closed. After restart and reprovision, the first affected test passed alone
   under race and the complete armed race matrix passed. This is recorded as
   fixture instability rather than erased from the evidence trail.
-- Hosted CI still needs to run the changed workflow after publication. Local
-  `actionlint` was unavailable; the workflow was YAML-parsed and reviewed, but
-  that is not a substitute for the hosted check.
+- Local `actionlint` was unavailable. The workflow was YAML-parsed and reviewed,
+  then GitHub executed it successfully in run 31658869628; the final
+  documentation-only evidence update must also retain green PR checks.
 
 ## Accepted owner scope decisions
 
@@ -124,5 +130,6 @@ claims that deferred features are implemented.
 | Guided setup | SQLite, PostgreSQL, and SQL Server only; source/target connection testing is part of setup and `analyze` is a separate explicit command. | PostgreSQL/SQL Server credential/TLS/connection evidence and the SQL Server live TLS setup test are recorded above. |
 | Global automation controls | No Stage 5 requirement for an explicit new-run ID, global JSON/file output selector, configurable shutdown timeout, or machine-progress interval. | Supported config/profile/state and WebUI controls remain documented; deferred controls require future additive contracts. |
 
-Acceptance of these boundaries does not by itself close the immutable
-publication gates listed elsewhere in this handoff and checklist.
+The implementation and accepted boundaries are published in PR #43 with green
+hosted evidence for commit `b09c540`. Stage 6 owns the remaining release-wide
+work identified above; it does not reopen the completed Stage 5 contract.

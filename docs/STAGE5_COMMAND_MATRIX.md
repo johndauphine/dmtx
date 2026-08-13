@@ -78,24 +78,27 @@ read-only `/profile list`:
 go test -tags=browser ./internal/api -run TestBrowserConsoleControls -count=1
 ```
 
-The latest recorded run on 2026-08-12 used local Google Chrome and passed. It
-proves authenticated launch/token exchange, discovery (every Supported registry
+The latest local run on 2026-08-12 used Google Chrome and passed. The hosted
+real-browser step also passed for immutable commit `b09c540`. Together they
+prove authenticated launch/token exchange, discovery (every Supported registry
 spelling), slash and `@` completion, parse parity, submit/progress rendering,
 reload/recovery, explicit cancellation, local-recall exclusions, and PWA asset
 restrictions, plus real read-only profile-list execution/rendering. It
 intentionally does not execute destructive migration, profile mutation or
 export/import, init, or AI-provider side effects in a browser; those remain
 focused application/API evidence rather than a claim of full end-to-end
-provider behavior. The tested working tree was uncommitted, so no commit SHA is
-claimed for this browser result.
+provider behavior. The committed result is published in
+[PR #43](https://github.com/johndauphine/dmtx/pull/43).
 
-## Remaining release gate
+## Release evidence
 
-This matrix closes no release-wide evidence on its own. The current working
-tree has passed WebUI authentication hardening, offline/race/static analysis,
+The published implementation has passed WebUI authentication hardening,
+offline/race/static analysis,
 real-browser acceptance, and the fully armed Stage 4 normal/race gates through
-`test/fixtures/gate.sh --race`. Hosted CI still has to exercise the workflow
-after publication. Stage 5 redaction evidence covers shipped sinks; future
-observability and notification sinks must meet the same requirement before they
-are exposed. The accepted AI, cache, setup, audit-policy, and global-control
-boundaries are recorded in the closeout handoff.
+`test/fixtures/gate.sh --race`. Hosted workflow run
+[31658869628](https://github.com/johndauphine/dmtx/actions/runs/31658869628)
+passed both PR jobs for commit `b09c540`. Stage 5 redaction evidence covers
+shipped sinks; future observability and notification sinks must meet the same
+requirement before they are exposed. The accepted AI, cache, setup,
+audit-policy, and global-control boundaries are recorded in the closeout
+handoff.

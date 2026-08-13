@@ -48,9 +48,9 @@ exercised locally and setup uses its real UI state machine. A real read-only
 `/profile list` executes and renders from the temporary encrypted store;
 profile save/delete/export/import remain outside this browser fixture.
 
-The latest recorded run on 2026-08-12 passed with local Google Chrome. It ran
-against an uncommitted working tree, so this document does not attach a commit
-SHA to that result.
+The latest local run on 2026-08-12 passed with Google Chrome. The required
+hosted browser step also passed for immutable implementation commit `b09c540`
+in [workflow run 31658869628](https://github.com/johndauphine/dmtx/actions/runs/31658869628).
 
 This is intentionally a real-browser test, not a replacement for API and
 handler tests. It is skipped unless built with `-tags=browser`. On a developer
