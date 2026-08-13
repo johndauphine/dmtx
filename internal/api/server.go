@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -129,7 +131,7 @@ func New(options Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	auth := &authenticator{launch: launch, session: session}
+	auth := newAuthenticator(launch, session, time.Now)
 
 	// Explicitly 127.0.0.1 rather than localhost: the name can resolve to an
 	// interface that is not loopback, and this listener must never be one.
@@ -179,7 +181,7 @@ func New(options Options) (*Server, error) {
 	server.activity.last = time.Now()
 
 	server.http = &http.Server{
-		Handler: server.routes(),
+		Handler: server.loopbackHostGuard(server.routes()),
 		// WriteTimeout is deliberately unset. It bounds the whole exchange, so
 		// any value would also be a cap on how long a migration may run, and
 		// the first run that outlived it would be cut off mid-write.
@@ -234,6 +236,64 @@ func (server *Server) ExitedIdle() bool { return server.exitedIdle.Load() }
 
 func (server *Server) routes() http.Handler {
 	return server.activity.track(server.routeMux())
+}
+
+// loopbackHostGuard rejects DNS-rebinding attempts before routing or
+// authentication. Binding a socket to 127.0.0.1 only constrains where a
+// connection arrives; without this check a browser that resolves an attacker
+// controlled hostname to loopback can still send that hostname in Host.
+//
+// The guard sits on the actual HTTP server handler. route-level tests invoke
+// routes directly to exercise API behaviour without manufacturing the
+// listener's ephemeral Host header; Serve always uses this guard.
+func (server *Server) loopbackHostGuard(next http.Handler) http.Handler {
+	_, ok := server.listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			http.Error(writer, "invalid host", http.StatusMisdirectedRequest)
+		})
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !isLoopbackHost(request.Host) {
+			http.Error(writer, "invalid host", http.StatusMisdirectedRequest)
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+// isLoopbackHost accepts only a literal loopback address or localhost with an
+// explicit numeric port. The port need not match the listener: an SSH local
+// forward commonly exposes a different local port while preserving a literal
+// loopback Host header. It does not resolve arbitrary names, and it ignores
+// forwarded headers, so a DNS rebind cannot make an attacker-controlled Host
+// look trusted.
+func isLoopbackHost(host string) bool {
+	name, suppliedPort, err := net.SplitHostPort(host)
+	if err != nil || !validHostPort(suppliedPort) {
+		return false
+	}
+	if strings.EqualFold(name, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(name)
+	return ip != nil && ip.IsLoopback()
+}
+
+// validHostPort deliberately accepts only the decimal TCP port form emitted
+// by browsers and SSH forwards. net.SplitHostPort separates a port but does
+// not establish that it is a usable numeric TCP port.
+func validHostPort(port string) bool {
+	if port == "" {
+		return false
+	}
+	for _, character := range port {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	value, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && value != 0
 }
 
 // routeMux keeps the patterns available to the shell asset test. routes still

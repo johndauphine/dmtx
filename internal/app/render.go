@@ -15,6 +15,7 @@ import (
 // exactly these bytes before the seam existed, and the existing CLI tests
 // compare them.
 func RenderText(stdout, stderr io.Writer, outcome Outcome) error {
+	outcome = RedactPublicOutcome(outcome)
 	for _, message := range outcome.Messages {
 		target := stdout
 		if message.Stream == StreamStderr {
@@ -41,6 +42,7 @@ func RenderText(stdout, stderr io.Writer, outcome Outcome) error {
 // this renderer does not inspect arbitrary data, so callers must not populate
 // Progress with secrets. Final outcomes remain machine-readable on stdout.
 func RenderProgress(writer io.Writer, progress Progress) error {
+	progress = RedactPublicProgress(progress)
 	record := struct {
 		Event string   `json:"event"`
 		Data  Progress `json:"progress"`

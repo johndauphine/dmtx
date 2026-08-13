@@ -226,3 +226,67 @@ func TestRenderProgressEmitsSanitizedMachineReadableRecord(t *testing.T) {
 		}
 	}
 }
+
+// TestPublicRenderersRedactCredentialDiagnostics protects the final rendering
+// boundary. A driver error must not turn into a credential leak merely because
+// a CLI, API embedding, or future caller renders an Outcome it did not build.
+func TestPublicRenderersRedactCredentialDiagnostics(t *testing.T) {
+	const secret = "renderer-secret-sentinel"
+	outcome := Outcome{
+		Command:  "run",
+		ExitCode: ConnectionError,
+		Messages: []Message{{
+			Stream: StreamStderr,
+			Text:   "connection failure: password=" + secret + " dsn=sqlserver://operator:" + secret + "@db.example:1433",
+		}},
+		Payload: &Payload{Kind: PayloadResult, Data: json.RawMessage(`{"tables":1}`)},
+	}
+
+	var stdout, stderr, encoded bytes.Buffer
+	if err := RenderText(&stdout, &stderr, outcome); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenderJSON(&encoded, outcome); err != nil {
+		t.Fatal(err)
+	}
+	for surface, output := range map[string]string{
+		"text": stderr.String(), "json": encoded.String(),
+	} {
+		if strings.Contains(output, secret) {
+			t.Errorf("%s renderer leaked credential: %q", surface, output)
+		}
+		if !strings.Contains(output, "connection failure") {
+			t.Errorf("%s renderer lost safe error classification: %q", surface, output)
+		}
+	}
+	var decoded Outcome
+	if err := json.Unmarshal(encoded.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ExitCode != ConnectionError || decoded.Payload == nil || string(decoded.Payload.Data) != `{"tables":1}` {
+		t.Fatalf("redaction changed public outcome facts: %#v", decoded)
+	}
+
+	progress := Progress{
+		Kind:   ProgressTablesPlanned,
+		Tables: []string{"orders", "password=" + secret},
+		Done:   0,
+		Total:  2,
+	}
+	var progressOutput bytes.Buffer
+	if err := RenderProgress(&progressOutput, progress); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(progressOutput.String(), secret) {
+		t.Fatalf("progress renderer leaked credential: %q", progressOutput.String())
+	}
+	var record struct {
+		Data Progress `json:"progress"`
+	}
+	if err := json.Unmarshal(progressOutput.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Data.Kind != ProgressTablesPlanned || record.Data.Done != 0 || record.Data.Total != 2 || record.Data.Tables[0] != "orders" {
+		t.Fatalf("redaction changed safe progress facts: %#v", record.Data)
+	}
+}

@@ -13,6 +13,42 @@ const apiRoutes = Object.freeze({
   setupInput: "/api/v1/setup/input"
 });
 
+const serviceWorkerPath = "/static/service-worker.js";
+const serviceWorkerPolicyName = "dmtx-service-worker";
+
+// Trusted Types applies to service-worker script URLs. This one policy is
+// intentionally named in the CSP and only vends the fixed, same-origin shell
+// worker; it cannot be reused to turn a command/API value into a script URL.
+function trustedServiceWorkerURL() {
+  if (!window.trustedTypes) return serviceWorkerPath;
+  const policy = window.trustedTypes.createPolicy(serviceWorkerPolicyName, {
+    createScriptURL(value) {
+      if (value !== serviceWorkerPath) throw new TypeError("unexpected service worker URL");
+      return value;
+    }
+  });
+  return policy.createScriptURL(serviceWorkerPath);
+}
+
+// The worker pre-caches only these fixed shell files. API responses remain
+// live: caching a job/status response could show an old migration state.
+// Keep this feature detection safe in non-browser renderer harnesses too. A
+// missing navigator/window means PWA installation is simply unavailable.
+if (typeof window !== "undefined" && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    let workerURL;
+    try {
+      workerURL = trustedServiceWorkerURL();
+    } catch (_) {
+      return;
+    }
+    navigator.serviceWorker.register(workerURL, { scope: "/" }).catch(() => {
+      // Installability is progressive enhancement; a blocked worker must not
+      // make an authenticated console unusable.
+    });
+  });
+}
+
 const transcript = document.querySelector("#transcript");
 const status = document.querySelector("#console-status");
 const summary = document.querySelector("#command-summary");
@@ -999,11 +1035,16 @@ function setupInvocation(typed) {
   if (!words.length) return null;
   const name = words[0].replace(/^\//, "");
   if (name !== "setup") return null;
-  const usage = "usage: /setup [postgres] [CONFIG | @CONFIG | --config CONFIG | --profile NAME]";
+  const usage = "usage: /setup [postgres|sqlserver] [CONFIG | @CONFIG | --config CONFIG | --profile NAME]";
   let index = 1;
   let engine = "sqlite";
   if (words[index] === "postgres") {
     engine = "postgres";
+    index++;
+  } else if (["mssql", "sqlserver", "sql-server"].includes(words[index])) {
+    // Keep the browser spelling compatible with DMT while the API receives
+    // DMTX's canonical engine name.
+    engine = "mssql";
     index++;
   }
   let configPath = "";

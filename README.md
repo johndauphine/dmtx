@@ -124,6 +124,13 @@ requires explicit operator confirmation:
 The same inspection commands accept the default SQLite path
 `migration.yaml.state.db`.
 
+## WebUI operations
+
+The authenticated console is loopback-only and supports SSH forwarding for
+remote operators. See [Stage 5 WebUI operations](docs/STAGE5_WEBUI_OPERATIONS.md)
+for launch, token exchange, idle/job behavior, PWA installation, and the
+real-browser acceptance command.
+
 ## Stage 3 fresh-run network adapters
 
 The Stage 3 branch implements all 12 directed cross-engine relational pairs
@@ -231,9 +238,9 @@ acknowledging the batch.
 
 ## Scope and roadmap
 
-This is not yet the full DMT compatibility target. Stage 4 data semantics,
-richer schema evolution, deep validation, WebUI/TUI, and release hardening
-remain staged work. The complete specification and staged acceptance
+This is not yet the full DMT compatibility target. Richer schema evolution,
+deep validation, and Stage 6 release hardening remain staged work. The
+complete specification and staged acceptance
 requirements are in
 [docs/RECREATE_DMT.md](docs/RECREATE_DMT.md).
 

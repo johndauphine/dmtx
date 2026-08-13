@@ -86,7 +86,7 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 		), false
 	}
 	if len(args) == 0 {
-		out.out("DMTX terminal UI is planned; use --help for automation commands.")
+		out.out("DMTX has no terminal UI; use dmtx serve for the WebUI or --help for CLI commands.")
 		return Request{}, out.done(Success), false
 	}
 	switch args[0] {
@@ -188,7 +188,7 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 	case "profile":
 		request, err := parseProfileArguments(args[1:])
 		if err != nil {
-			return refuseArguments(out, err, "usage: dmtx profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT]")
+			return refuseArguments(out, err, "usage: dmtx profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT] --passphrase-file PATH (default: NAME.dmtx-profile.json) | import NAME INPUT --passphrase-file PATH")
 		}
 		return request, Outcome{}, true
 	case "ai":
@@ -879,9 +879,9 @@ func helpLines() []string {
 		"  /ai config-review|runbook [CONFIG | --profile NAME] [--timeout DURATION] [--request TEXT]",
 		"  /status [CONFIG | --profile NAME] [--state PATH] [-d|--detailed]",
 		"  /history [CONFIG | --profile NAME] [--state PATH] [--run ID]",
-		"  /profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT]",
+		"  /profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT] --passphrase-file PATH (default: NAME.dmtx-profile.json) | import NAME INPUT --passphrase-file PATH",
 		"  /init [--config CONFIG] [--force] | /init-secrets [--force|-f] [--with-ai]",
-		"  /setup [postgres] [CONFIG | @CONFIG | --config CONFIG | --profile NAME]",
+		"  /setup [postgres|sqlserver] [CONFIG | @CONFIG | --config CONFIG | --profile NAME]",
 		"  /session [KEY VALUE] | /session clear [KEY]    (config, profile, state-file)",
 		"  /logs | /about | /clear | /quit|/exit",
 		"",

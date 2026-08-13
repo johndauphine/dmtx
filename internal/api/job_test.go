@@ -641,6 +641,121 @@ func TestProgressReportsBecomeStreamEvents(t *testing.T) {
 	}
 }
 
+// TestPublicJobSurfacesRedactExecutorDiagnostics treats the app executor as an
+// untrusted lower layer at the API boundary. Production commands normally
+// construct safe Outcomes themselves, but retaining an arbitrary executor
+// result for an hour must not turn one bad driver diagnostic into a credential
+// leak through /execute, job status, or the replayable SSE stream.
+func TestPublicJobSurfacesRedactExecutorDiagnostics(t *testing.T) {
+	const secret = "api-job-secret-sentinel"
+	server := newTestServer(t)
+	server.jobs.execute = func(
+		_ context.Context, request app.Request, report app.ProgressFunc,
+	) app.Outcome {
+		report(app.Progress{
+			Kind:   app.ProgressTablesPlanned,
+			Tables: []string{"orders", "password=" + secret},
+			Done:   0,
+			Total:  2,
+		})
+		return app.Outcome{
+			Command:  request.Command,
+			ExitCode: app.ConnectionError,
+			Messages: []app.Message{{
+				Stream: app.StreamStderr,
+				Text:   "connection failure: password=" + secret + " dsn=postgres://reader:" + secret + "@db.example/app",
+			}},
+		}
+	}
+
+	// Synchronous execute waits for the same retained job. It must therefore
+	// expose its redacted form rather than the raw executor Outcome.
+	direct := httptest.NewRequest(http.MethodPost, "/api/v1/execute", strings.NewReader(`{"command":"run"}`))
+	direct.Header.Set("Authorization", "Bearer "+server.auth.session)
+	directResponse := httptest.NewRecorder()
+	server.routes().ServeHTTP(directResponse, direct)
+	if directResponse.Code != http.StatusOK {
+		t.Fatalf("execute returned %d: %s", directResponse.Code, directResponse.Body.String())
+	}
+	if strings.Contains(directResponse.Body.String(), secret) {
+		t.Fatalf("direct execute leaked credential: %s", directResponse.Body.String())
+	}
+	var directOutcome app.Outcome
+	if err := json.Unmarshal(directResponse.Body.Bytes(), &directOutcome); err != nil {
+		t.Fatal(err)
+	}
+	if directOutcome.ExitCode != app.ConnectionError || len(directOutcome.Messages) != 1 || !strings.Contains(directOutcome.Messages[0].Text, "connection failure") {
+		t.Fatalf("direct execute lost safe classification: %#v", directOutcome)
+	}
+
+	// The asynchronous endpoint gives us an id for both retained status and
+	// replayed events. It uses the same executor, so every public form must be
+	// equally redacted.
+	start := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", strings.NewReader(`{"command":"run"}`))
+	start.Header.Set("Authorization", "Bearer "+server.auth.session)
+	startResponse := httptest.NewRecorder()
+	server.routes().ServeHTTP(startResponse, start)
+	if startResponse.Code != http.StatusAccepted {
+		t.Fatalf("start returned %d: %s", startResponse.Code, startResponse.Body.String())
+	}
+	var started struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(startResponse.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	running, ok := server.jobs.find(started.ID)
+	if !ok || !waitFor(func() bool { _, done := running.result(); return done }) {
+		t.Fatal("asynchronous job did not finish")
+	}
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+started.ID, nil)
+	statusRequest.Header.Set("Authorization", "Bearer "+server.auth.session)
+	statusResponse := httptest.NewRecorder()
+	server.routes().ServeHTTP(statusResponse, statusRequest)
+	if statusResponse.Code != http.StatusOK {
+		t.Fatalf("status returned %d: %s", statusResponse.Code, statusResponse.Body.String())
+	}
+	if strings.Contains(statusResponse.Body.String(), secret) {
+		t.Fatalf("retained job status leaked credential: %s", statusResponse.Body.String())
+	}
+	var status struct {
+		State   string      `json:"state"`
+		Outcome app.Outcome `json:"outcome"`
+	}
+	if err := json.Unmarshal(statusResponse.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.State != "finished" || status.Outcome.ExitCode != app.ConnectionError || !strings.Contains(status.Outcome.Messages[0].Text, "connection failure") {
+		t.Fatalf("retained status lost safe classification: %#v", status)
+	}
+
+	events := streamEvents(t, server, started.ID, 0)
+	for _, event := range events {
+		if strings.Contains(string(event.Data), secret) {
+			t.Fatalf("SSE %s event leaked credential: %s", event.Kind, event.Data)
+		}
+		switch event.Kind {
+		case eventProgress:
+			var progress app.Progress
+			if err := json.Unmarshal(event.Data, &progress); err != nil {
+				t.Fatal(err)
+			}
+			if progress.Kind != app.ProgressTablesPlanned || progress.Total != 2 || len(progress.Tables) != 2 || progress.Tables[0] != "orders" {
+				t.Fatalf("SSE progress lost safe facts: %#v", progress)
+			}
+		case eventFinished:
+			var outcome app.Outcome
+			if err := json.Unmarshal(event.Data, &outcome); err != nil {
+				t.Fatal(err)
+			}
+			if outcome.ExitCode != app.ConnectionError || !strings.Contains(outcome.Messages[0].Text, "connection failure") {
+				t.Fatalf("SSE outcome lost safe classification: %#v", outcome)
+			}
+		}
+	}
+}
+
 // TestTheEventBufferIsBounded pins that a migration with a great many tables
 // does not hold every report it ever made for an hour after finishing.
 func TestTheEventBufferIsBounded(t *testing.T) {

@@ -165,6 +165,7 @@ func (running *job) appendLocked(kind string, data json.RawMessage, retention st
 // anything that escaped here would be a watcher interfering with the work being
 // watched.
 func (running *job) reportProgress(event app.Progress) {
+	event = app.RedactPublicProgress(event)
 	encoded, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -186,6 +187,7 @@ func (running *job) reportProgress(event app.Progress) {
 // ever sending it, and the operator watches a completed migration that never
 // says how it went.
 func (running *job) complete(outcome app.Outcome) {
+	outcome = app.RedactPublicOutcome(outcome)
 	encoded, err := json.Marshal(outcome)
 	if err != nil {
 		// An outcome that will not marshal still has to end the job, or a

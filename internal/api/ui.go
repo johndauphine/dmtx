@@ -14,7 +14,22 @@ var consoleJS []byte
 //go:embed static/console.css
 var consoleCSS []byte
 
-const consoleCSP = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; require-trusted-types-for 'script'"
+//go:embed static/manifest.webmanifest
+var consoleManifest []byte
+
+//go:embed static/service-worker.js
+var consoleServiceWorker []byte
+
+//go:embed static/icon.svg
+var consoleIcon []byte
+
+//go:embed static/icon-192.png
+var consoleIcon192 []byte
+
+//go:embed static/icon-512.png
+var consoleIcon512 []byte
+
+const consoleCSP = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types dmtx-service-worker"
 
 func consoleHeaders(writer http.ResponseWriter) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
@@ -44,6 +59,24 @@ func (server *Server) consoleAsset(writer http.ResponseWriter, request *http.Req
 	case "/static/console.css":
 		writer.Header().Set("Content-Type", "text/css; charset=utf-8")
 		_, _ = writer.Write(consoleCSS)
+	case "/static/manifest.webmanifest":
+		writer.Header().Set("Content-Type", "application/manifest+json")
+		_, _ = writer.Write(consoleManifest)
+	case "/static/service-worker.js":
+		// A service worker must be able to control the root shell, while the
+		// handler remains a fixed embedded asset behind session auth.
+		writer.Header().Set("Service-Worker-Allowed", "/")
+		writer.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = writer.Write(consoleServiceWorker)
+	case "/static/icon.svg":
+		writer.Header().Set("Content-Type", "image/svg+xml")
+		_, _ = writer.Write(consoleIcon)
+	case "/static/icon-192.png":
+		writer.Header().Set("Content-Type", "image/png")
+		_, _ = writer.Write(consoleIcon192)
+	case "/static/icon-512.png":
+		writer.Header().Set("Content-Type", "image/png")
+		_, _ = writer.Write(consoleIcon512)
 	default:
 		http.NotFound(writer, request)
 	}

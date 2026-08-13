@@ -124,6 +124,28 @@ func TestSetupAPIAcceptsPostgresWorkflow(t *testing.T) {
 	}
 }
 
+func TestSetupAPIAcceptsSQLServerWorkflowAliases(t *testing.T) {
+	for _, engine := range []string{"mssql", "sqlserver", "sql-server"} {
+		t.Run(engine, func(t *testing.T) {
+			server := newTestServer(t)
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/start", strings.NewReader(`{"engine":"`+engine+`"}`))
+			request.Header.Set("Authorization", "Bearer "+server.auth.session)
+			recorder := httptest.NewRecorder()
+			server.routes().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("%s start = %d, want %d", engine, recorder.Code, http.StatusOK)
+			}
+			var prompt app.SetupPrompt
+			if err := json.NewDecoder(recorder.Body).Decode(&prompt); err != nil {
+				t.Fatal(err)
+			}
+			if prompt.Step != "source_host" || prompt.Text != "Source SQL Server host" || prompt.Default != "localhost" || prompt.Masked {
+				t.Fatalf("%s start prompt = %+v", engine, prompt)
+			}
+		})
+	}
+}
+
 func TestSetupAPIRejectsAmbiguousProfileAndConfigPath(t *testing.T) {
 	server := newTestServer(t)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/start", strings.NewReader(`{"profile_name":"saved","config_path":"saved.yaml"}`))
@@ -148,7 +170,7 @@ func TestSetupAPIReportsSafeActionableStartErrors(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["error"] != "unsupported setup engine; choose sqlite or postgres" {
+	if body["error"] != "unsupported setup engine; choose sqlite, postgres, or sqlserver" {
 		t.Fatalf("setup error = %q", body["error"])
 	}
 }
