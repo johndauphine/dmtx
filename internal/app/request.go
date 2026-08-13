@@ -43,10 +43,15 @@ type Request struct {
 	// concern: the same status request must return the same facts everywhere.
 	Detailed bool `json:"detailed,omitempty"`
 
-	// OutputPath is used by an explicit profile export. The profile store stays
-	// encrypted at rest; export is the operator's deliberate request to write a
-	// protected plaintext configuration.
+	// OutputPath is the server-side portable export or import path. Portable
+	// profiles are encrypted independently of the encrypted store at rest.
 	OutputPath string `json:"output_path,omitempty"`
+
+	// PassphraseFile is a server-side path to a private regular file. It is
+	// intentionally a path, never passphrase contents: surfaces may serialize
+	// the path, but the passphrase must never enter a Request, URL, history, or
+	// outcome.
+	PassphraseFile string `json:"passphrase_file,omitempty"`
 
 	// Latest distinguishes status from history, which share an implementation.
 	Latest bool `json:"latest,omitempty"`
@@ -204,5 +209,5 @@ func (builder *outcomeBuilder) failWith(code int, text string) Outcome {
 // marshalOutcome is the single place an Outcome becomes bytes, so every
 // surface that emits one emits the same shape.
 func marshalOutcome(outcome Outcome) ([]byte, error) {
-	return json.Marshal(outcome)
+	return json.Marshal(RedactPublicOutcome(outcome))
 }

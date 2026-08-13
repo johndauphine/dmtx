@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"image"
+	_ "image/png"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -29,6 +32,11 @@ func TestConsoleServesAuthenticatedExternalAssets(t *testing.T) {
 		{"/", "text/html", "/static/console.js"},
 		{"/static/console.js", "text/javascript", "const apiRoutes"},
 		{"/static/console.css", "text/css", ".console-shell"},
+		{"/static/manifest.webmanifest", "application/manifest+json", "\"display\": \"standalone\""},
+		{"/static/service-worker.js", "text/javascript", "const shellAssets"},
+		{"/static/icon.svg", "image/svg+xml", "<svg"},
+		{"/static/icon-192.png", "image/png", "PNG"},
+		{"/static/icon-512.png", "image/png", "PNG"},
 	} {
 		t.Run(testCase.path, func(t *testing.T) {
 			recorder := consoleRequest(t, server, testCase.path, true)
@@ -53,10 +61,78 @@ func TestConsoleServesAuthenticatedExternalAssets(t *testing.T) {
 		})
 	}
 
-	for _, path := range []string{"/", "/static/console.js", "/static/console.css"} {
+	for _, path := range []string{"/", "/static/console.js", "/static/console.css", "/static/manifest.webmanifest", "/static/service-worker.js", "/static/icon.svg", "/static/icon-192.png", "/static/icon-512.png"} {
 		if recorder := consoleRequest(t, server, path, false); recorder.Code != http.StatusUnauthorized {
 			t.Errorf("unauthenticated GET %s = %d, want 401", path, recorder.Code)
 		}
+	}
+}
+
+func TestConsoleManifestRasterIconsHaveDeclaredDimensions(t *testing.T) {
+	for _, icon := range []struct {
+		name string
+		data []byte
+		size int
+	}{
+		{"192", consoleIcon192, 192},
+		{"512", consoleIcon512, 512},
+	} {
+		t.Run(icon.name, func(t *testing.T) {
+			decoded, format, err := image.Decode(bytes.NewReader(icon.data))
+			if err != nil || format != "png" {
+				t.Fatalf("decode PNG: format=%q err=%v", format, err)
+			}
+			bounds := decoded.Bounds()
+			if bounds.Dx() != icon.size || bounds.Dy() != icon.size {
+				t.Errorf("dimensions = %dx%d, want %dx%d", bounds.Dx(), bounds.Dy(), icon.size, icon.size)
+			}
+		})
+	}
+	manifest := string(consoleManifest)
+	for _, expected := range []string{
+		`"src": "/static/icon-192.png"`, `"sizes": "192x192"`,
+		`"src": "/static/icon-512.png"`, `"sizes": "512x512"`,
+	} {
+		if !strings.Contains(manifest, expected) {
+			t.Errorf("manifest is missing %q", expected)
+		}
+	}
+}
+
+func TestConsolePWAShellCachesOnlyFixedAssets(t *testing.T) {
+	for _, expected := range []string{
+		`rel="manifest" href="/static/manifest.webmanifest"`,
+		`const serviceWorkerPath = "/static/service-worker.js"`,
+		`const serviceWorkerPolicyName = "dmtx-service-worker"`,
+		`trustedTypes.createPolicy(serviceWorkerPolicyName`,
+		`if (value !== serviceWorkerPath)`,
+		`navigator.serviceWorker.register(workerURL, { scope: "/" })`,
+		`"display": "standalone"`,
+		`"purpose": "any maskable"`,
+		`"src": "/static/icon-192.png"`, `"src": "/static/icon-512.png"`,
+	} {
+		if !strings.Contains(string(consoleHTML)+string(consoleJS)+string(consoleManifest), expected) {
+			t.Errorf("PWA shell is missing %q", expected)
+		}
+	}
+	worker := string(consoleServiceWorker)
+	for _, asset := range []string{
+		`"/static/console.css"`, `"/static/console.js"`,
+		`"/static/manifest.webmanifest"`, `"/static/icon.svg"`,
+		`"/static/icon-192.png"`, `"/static/icon-512.png"`,
+	} {
+		if !strings.Contains(worker, asset) {
+			t.Errorf("service worker does not pre-cache shell asset %q", asset)
+		}
+	}
+	if !strings.Contains(worker, `pathname.startsWith("/api/v1/")`) ||
+		!strings.Contains(worker, `if (event.request.method !== "GET") return;`) ||
+		!strings.Contains(worker, `pathname === "/"`) {
+		t.Error("service worker does not explicitly bypass API, non-GET, and authenticated document requests")
+	}
+	precache := worker[strings.Index(worker, "const shellAssets"):strings.Index(worker, `self.addEventListener("install"`)]
+	if strings.Contains(precache, "/api/v1/") {
+		t.Error("service worker pre-caches an API path")
 	}
 }
 
@@ -82,6 +158,9 @@ func TestConsoleAssetsKeepDataOutOfHTMLConstructionPaths(t *testing.T) {
 	}
 	if !strings.Contains(consoleCSP, "require-trusted-types-for 'script'") {
 		t.Error("console CSP does not enforce Trusted Types for script sinks")
+	}
+	if !strings.Contains(consoleCSP, "trusted-types dmtx-service-worker") {
+		t.Error("console CSP does not restrict Trusted Types policies to the service worker policy")
 	}
 }
 
@@ -125,7 +204,7 @@ func TestConsoleRouteMarkersReachTheRegisteredMux(t *testing.T) {
 	// the real mux. It says nothing about browser fetch/event behavior, which
 	// remains real-browser acceptance work.
 	server := newTestServer(t)
-	source := string(consoleHTML) + string(consoleJS)
+	source := string(consoleHTML) + string(consoleJS) + string(consoleManifest)
 	for _, testCase := range []struct {
 		marker  string
 		method  string
@@ -134,6 +213,11 @@ func TestConsoleRouteMarkersReachTheRegisteredMux(t *testing.T) {
 	}{
 		{"/static/console.js", http.MethodGet, "/static/console.js", "GET /static/"},
 		{"/static/console.css", http.MethodGet, "/static/console.css", "GET /static/"},
+		{"/static/manifest.webmanifest", http.MethodGet, "/static/manifest.webmanifest", "GET /static/"},
+		{"/static/service-worker.js", http.MethodGet, "/static/service-worker.js", "GET /static/"},
+		{"/static/icon.svg", http.MethodGet, "/static/icon.svg", "GET /static/"},
+		{"/static/icon-192.png", http.MethodGet, "/static/icon-192.png", "GET /static/"},
+		{"/static/icon-512.png", http.MethodGet, "/static/icon-512.png", "GET /static/"},
 		{"/api/v1/commands", http.MethodGet, "/api/v1/commands", "GET /api/v1/commands"},
 		{"/api/v1/parse", http.MethodPost, "/api/v1/parse", "POST /api/v1/parse"},
 		{"/api/v1/complete", http.MethodGet, "/api/v1/complete", "GET /api/v1/complete"},
@@ -309,6 +393,16 @@ const setupConfig = context.setupInvocation('/setup --config=migration.yaml');
 assert(setupConfig && setupConfig.engine === "sqlite" && setupConfig.config_path === "migration.yaml", "setup config equals form missing");
 const setupProfile = context.setupInvocation('/setup --profile saved');
 assert(setupProfile && setupProfile.profile_name === "saved" && setupProfile.config_path === "", "profile-backed setup missing");
+for (const alias of ["mssql", "sqlserver", "sql-server"]) {
+  const setupSQLServer = context.setupInvocation("/setup " + alias + " @migration.yaml");
+  assert(setupSQLServer && setupSQLServer.engine === "mssql" && setupSQLServer.config_path === "migration.yaml", "SQL Server alias/@ form missing: " + alias);
+}
+
+const setupSQLServerEquals = context.setupInvocation('/setup sqlserver --config=migration.yaml');
+assert(setupSQLServerEquals && setupSQLServerEquals.engine === "mssql" && setupSQLServerEquals.config_path === "migration.yaml", "SQL Server config equals form missing");
+const setupSQLServerProfile = context.setupInvocation('/setup sql-server --profile saved');
+assert(setupSQLServerProfile && setupSQLServerProfile.engine === "mssql" && setupSQLServerProfile.profile_name === "saved", "SQL Server profile form missing");
+assert(context.setupInvocation('/setup sqlserver migration.yaml --profile saved').error.includes("choose one"), "setup path/profile ambiguity missing");
 assert(context.setupInvocation('/wizard @migration.yaml') === null, "wizard must reach the server refusal rather than impersonate setup");
 function render(payload) {
   entries.length = 0;
@@ -364,5 +458,24 @@ assert(!long.includes("x".repeat(513)), "field cap missing");
 	command := exec.Command(node, "-e", harness, "static/console.js")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("console renderer harness failed: %v\n%s", err, output)
+	}
+}
+
+// TestConsoleLocalCommandBehavior exercises each browser-owned Supported
+// command through localCommand, including its grammar and API effects.
+func TestConsoleLocalCommandBehavior(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the browser local-command harness")
+	}
+	const harness = `
+const fs=require("fs"),vm=require("vm");let source=fs.readFileSync(process.argv[1],"utf8");source=source.slice(0,source.lastIndexOf("Promise.all([loadCommands(), recoverJobs()])"));
+const requests=[],downloads=[],revoked=[];const el=()=>({hidden:false,value:"",type:"text",disabled:false,textContent:"",children:[],addEventListener(){},setAttribute(){},removeAttribute(){},querySelectorAll(){return []},replaceChildren(){this.children=[]},append(...x){this.children.push(...x)},click(){downloads.push(this)},scrollIntoView(){}}),transcript=el(),status=el(),line=el();
+const context={console,URLSearchParams,JSON,String,Number,Array,Object,Map,Set,Blob,document:{querySelector(s){return s==="#transcript"?transcript:s==="#console-status"?status:s==="#line"?line:el()},createElement(){return el()}},URL:{createObjectURL(){return "blob:test"},revokeObjectURL(x){revoked.push(x)}},localStorage:{removeItem(){},getItem(){return null},setItem(){}},window:{n:0,close(){this.n++},setTimeout(f){f()},addEventListener(){}},fetch:async(path,o={})=>{requests.push({path,method:o.method,body:o.body});let body={};if(path==="/api/v1/session")body={defaults:[{key:"config",value:"old.yaml",description:"config"},{key:"state",value:"old.db",description:"state"}]};if(path==="/api/v1/parse")body={outcome:{messages:[{text:"DMTX test version"}]}};return {ok:true,text:async()=>JSON.stringify(body)}}};vm.createContext(context);vm.runInContext(source,context);const ok=(x,m)=>{if(!x)throw new Error(m)},text=()=>transcript.children.map(x=>x.textContent).join("\n");async function run(x){transcript.replaceChildren();status.textContent="";requests.length=0;return context.localCommand(x)}async function refuse(x){try{return await run(x)}catch(e){return context.localUsage(e.message)}}
+(async()=>{ok(await run("/help"),"help");ok(text().includes("DMTX test version")&&status.textContent.includes("discovery"),"help behavior");ok(await run("/about"),"about");ok(text().includes("Deterministic database migration tool")&&status.textContent.includes("About"),"about behavior");transcript.append({textContent:"old"});ok(await context.localCommand("/clear"),"clear");ok(transcript.children.length===0&&status.textContent==="Transcript cleared.","clear behavior");ok(await run("/logs"),"logs");ok(downloads.length===1&&downloads[0].download==="session.log"&&text().includes("Logs downloaded")&&status.textContent.includes("downloaded")&&revoked[0]==="blob:test","logs behavior");ok(await run("/session"),"session get");ok(requests.length===1&&requests[0].method==="GET"&&text().includes("state-file = old.db"),"session get behavior");ok(await run('/session config "new config.yaml"'),"session set");ok(requests[0].method==="POST"&&JSON.parse(requests[0].body).key==="config"&&JSON.parse(requests[0].body).value==="new config.yaml","session set behavior");ok(await run("/session clear state-file"),"session delete");ok(requests[0].method==="DELETE"&&requests[0].path.endsWith("/state"),"session delete behavior");ok(await run("/session clear"),"session clear all");ok(requests.length===3&&requests.slice(1).every(x=>x.method==="DELETE")&&text().includes("All session defaults cleared."),"session clear all behavior");for(const bad of ["/help extra","/about extra","/clear x","/logs x","/session config","/session clear config extra",'/session config "unterminated']){ok(await refuse(bad),"handled "+bad);ok(status.textContent==="Command request failed."&&(text().includes("usage:")||text().includes("unterminated quote")),"refusal "+bad)}for(const x of ["/quit","/exit"]){ok(await run(x),x);ok(context.window.n>0&&status.textContent.includes("close it manually"),x+" fallback")}ok(!(await run("/status")),"server command intercepted")})().catch(e=>{console.error(e.stack);process.exitCode=1});
+`
+	command := exec.Command(node, "-e", harness, "static/console.js")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("console local-command harness failed: %v\n%s", err, output)
 	}
 }

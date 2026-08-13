@@ -3,8 +3,9 @@
 # This workflow does NOT prove Stage 4 semantics. It runs the suite with no
 # database endpoints configured, so every live test skips and the suite still
 # reports success. That is by design for a hosted runner, but it means a green
-# check here says: it compiles, offline tests pass, vet is clean, there are no
-# data races, and it cross-builds.
+# check here says: it compiles, offline tests pass, formatting and vet are
+# clean, the real local browser console passes, there are no data races, and it
+# cross-builds.
 #
 # The Stage 4 claim rests on the armed gate, which must currently be run
 # locally:
@@ -70,11 +71,33 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Verify Go formatting
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required for:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Run offline tests (live endpoints absent, live tests skip)
         run: go test ./...
 
       - name: Run static analysis
         run: go vet ./...
+
+      - name: Run real-browser console acceptance
+        # GitHub's Ubuntu runner supplies Chrome. This is deliberately a
+        # required browser test: a missing binary is a failed gate, not a skip.
+        env:
+          DMTX_BROWSER_BINARY: /usr/bin/google-chrome
+        run: |
+          if [ ! -x "$DMTX_BROWSER_BINARY" ]; then
+            echo "required Chrome binary missing: $DMTX_BROWSER_BINARY"
+            exit 1
+          fi
+          "$DMTX_BROWSER_BINARY" --version
+          go test -tags=browser ./internal/api -run TestBrowserConsoleControls -count=1
 
       - name: Detect unused code
         # go vet does not report unreachable declarations. This gate exists
@@ -101,7 +124,8 @@ jobs:
             echo "### Offline verification only"
             echo
             echo "This job had no database endpoints, so every live test skipped."
-            echo "It proves compilation, offline tests, vet, race, and cross-build."
+            echo "It proves compilation, gofmt, offline tests, vet, real-browser"
+            echo "console interaction, race, and cross-build."
             echo
             echo "Stage 4 semantics are proven by the **live** job in this same"
             echo "workflow, which runs the armed gate against real containers."

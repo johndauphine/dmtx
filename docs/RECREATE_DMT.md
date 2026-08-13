@@ -15,8 +15,8 @@ observable contracts, interoperability boundaries, compatibility rules, and
 safety invariants in this document.
 
 This is a reconstruction, not a loose reimagining. Deliver a self-contained
-command-line application with interactive terminal and browser operator
-surfaces, deterministic database migration behavior, safe restartability, and
+command-line application with an authenticated browser operator surface,
+deterministic database migration behavior, safe restartability, and
 production-grade operational controls.
 
 ### Requirement vocabulary
@@ -53,8 +53,8 @@ The product MUST:
    implement its required deterministic migrated-schema DDL planning and
    rendering within its own application as specified in
    [Section 6](#6-deterministic-schema-ddl-generation-normative).
-5. Expose one shared command and orchestration model through a CLI, terminal
-   UI, and embedded browser UI. Front ends MUST NOT implement divergent
+5. Expose one shared command and orchestration model through a CLI and
+   authenticated embedded browser UI. Front ends MUST NOT implement divergent
    migration logic.
 6. Be useful interactively and in unattended schedulers such as Airflow,
    Kubernetes Jobs, and CI systems.
@@ -144,17 +144,15 @@ Defaults MUST be secure:
 
 The executable name MUST be `dmtx`.
 
-With no command, `dmtx` MUST launch an interactive terminal UI. With `--webui`
-and no command, it MUST launch an embedded browser UI. Ordinary subcommands
-MUST use the same application services and orchestrator as both interactive
-front ends.
+The CLI is the non-interactive surface. `dmtx serve` MUST launch an
+authenticated embedded browser UI; ordinary subcommands and the WebUI MUST use
+the same application services and orchestrator.
 
-The terminal UI MUST provide discoverable slash commands, configuration file
-selection, session defaults, live progress, log capture, resume, and setup.
 The browser UI MUST provide an authenticated single-operator console for run,
 resume, cancel, progress streaming, status/history, preflight, dry-run,
-validation, diagnosis, analysis, setup, profiles, cache management, and session
-settings.
+validation, diagnosis, analysis, setup, profiles, and session settings. A
+terminal UI is deliberately omitted: the CLI plus this loopback/SSH-forwarded
+WebUI are the Stage 5 interactive surfaces.
 
 A machine-checked registry or equivalent contract test MUST ensure that every
 CLI command declares whether it is supported, deliberately omitted, or planned
@@ -166,36 +164,39 @@ disposition MUST fail tests.
 The CLI MUST provide these commands and aliases:
 
 - `run`: start a new migration; support dry-run, explicit schema/worker
-  overrides, tuning exploration, selective preflight skips, and destructive
-  target backup acknowledgment.
+  overrides, selective preflight skips, and destructive target backup
+  acknowledgment.
 - `resume`: continue the newest eligible run for the canonical target; support
   config override acknowledgment, preflight skips, and explicit abandonment
   with an operator reason.
 - `status`: show the current or last run, including outcome and resumability;
   support JSON.
 - `history`: list runs or show a selected run.
-- `validate`: run deterministic validation; optionally request AI advisory
-  triage without changing deterministic results.
+- `validate`: run deterministic validation.
 - `diagnose`: build deterministic failure facts for the current or selected
-  run; optionally add AI advisory triage.
+  run.
 - `preflight`, with `health-check` as an alias: test connectivity and readiness.
-- `analyze`: inspect source workload and recommend deterministic configuration;
-  optionally apply recommendations and request an AI explanation.
-- `profile save|list|delete|export`: manage encrypted configuration profiles
-  in the full local state backend.
-- `ai config-review`, with `ai runbook` as an alias: produce advisory config
-  patches and an operator runbook.
-- `ai evals`: run or list fixed developer-facing advisory quality scenarios.
-- `init`: create configuration interactively.
+- `analyze`: inspect source workload and report deterministic configuration
+  recommendations.
+- `profile save|list|delete|export|import`: manage encrypted configuration
+  profiles in the full local state backend. Portable export/import use encrypted
+  artifacts and protected local files.
+- `ai config-review`, with `ai runbook` as an alias: produce a metadata-only,
+  display-only advisory configuration review. It does not generate patches or
+  an operation-specific runbook.
+- `init`: create a protected starter configuration; existing files require an
+  explicit overwrite control.
 - `init-secrets`: create a secure secrets template; AI fields are opt-in.
-- `setup`: guided secrets, config, connection-test, and analysis workflow.
-- `cache clear`: invalidate type-mapping cache entries, optionally only those
-  derived from AI.
+- `setup`: guided secrets, configuration, and connection-test workflow for
+  SQLite, PostgreSQL, and SQL Server. `analyze` remains the separate explicit
+  analysis command.
 
-Global automation controls MUST include configuration/profile selection, an
-optional YAML state file, explicit run ID, JSON stdout/file output, log format
-and verbosity, graceful shutdown timeout, machine-readable progress interval,
-Prometheus bind address, OTLP endpoint, audit settings, and WebUI settings.
+Stage 5 global automation controls include configuration/profile selection, an
+optional YAML state file, and WebUI settings. An explicit ID for a new run,
+global JSON/file-output selection, configurable shutdown timeout,
+machine-readable progress interval, structured-log settings, Prometheus, OTLP,
+and notification settings are not Stage 5 requirements; they may be added only
+as documented additive capabilities.
 
 Help text is part of the stable public contract. CLI parsing errors and
 application errors MUST be centralized so every front end receives the same
@@ -221,9 +222,11 @@ matching. Human-readable wording MAY change; exit-code meaning MUST NOT.
 
 ### 3.4 JSON and progress output
 
-When JSON result output is enabled, stdout MUST contain only the final
-machine-readable result; logs MUST move to stderr. A file-output option MUST
-write the same structure with restrictive permissions.
+If a future output mode enables JSON result output, stdout MUST contain only
+the final machine-readable result and logs MUST move to stderr. If a future
+file-output option is provided, it MUST write the same structure with
+restrictive permissions. Stage 5 does not require a global selector for either
+mode.
 
 Result, status, history, and WebUI APIs MUST distinguish:
 
@@ -233,8 +236,15 @@ Result, status, history, and WebUI APIs MUST distinguish:
 - phase, timestamps, duration, table totals, rows, throughput, failures, and
   deterministic validation facts.
 
-Machine progress MUST be a stream of JSON events on stderr and MUST not corrupt
-final JSON output.
+Shipped CLI/API/WebUI progress and terminal outcomes MUST remain sanitized and
+must not corrupt any enabled machine-readable result mode. A separately
+selectable machine-progress interval is not a Stage 5 requirement.
+
+Migration/run history is durable state: the SQLite state backend retains it and
+the explicitly selected YAML state backend retains its supported history. This
+is distinct from browser command recall, which is bounded local browser state
+and is never a DMTX server archive. Full operational logs and transcripts are
+captured and retained by the calling orchestration system.
 
 ## 4. Configuration and secrets contract (normative)
 
@@ -263,7 +273,7 @@ The migration section MUST support:
 - `strict_consistency` and `strict_consistency_scope: table|migration`;
 - schema drift and schema-contract policy;
 - validation policy;
-- checkpoints, retries, and history retention;
+- checkpoints, retries, and durable migration/run-history retention;
 - ordered date-updated column candidates;
 - deterministic pre-run tuning and deterministic runtime tuning;
 - delete reconciliation policy;
@@ -387,13 +397,15 @@ you choose MUST expose and test these logical responsibilities:
    into deterministic target type mappings and ordered DDL plans, rendering
    those plans for the selected dialect, and executing them.
 4. **Migration orchestrator**: lifecycle, phases, target-mode policy,
-   scheduling, retries, validation, notifications, audit, and final outcome.
+   scheduling, retries, validation, audit, final outcome, and any future
+   notification integration.
 5. **Transfer engine**: bounded pipeline, pagination, conversion, writer
    acknowledgments, checkpoints, replay, and statistics.
 6. **State service**: runs, tasks, progress, fences, leases, snapshots,
    watermarks, histories, and backend capabilities.
-7. **Operational surfaces**: CLI, terminal UI, WebUI, structured output,
-   logging, metrics, tracing, and graceful cancellation.
+7. **Operational surfaces**: CLI, authenticated WebUI, shipped sanitized
+   progress/outcomes, graceful cancellation, and any future logging, metrics,
+   or tracing integration.
 8. **Deterministic advisory layer**: tuning rules, preflight facts, error
    diagnosis, and optional AI augmentation.
 
@@ -540,7 +552,8 @@ mandatory:
 2. Open source and target connections.
 3. Acquire exclusive fenced ownership of the canonical target.
 4. Create and bind durable run state before recording mutable progress.
-5. Initialize audit, logs, metrics, traces, notifications, and cancellation.
+5. Initialize mandatory audit and cancellation. Any future logs, metrics,
+   traces, or notifications are additive and must meet Section 15 before use.
 6. Run preflight before destructive target mutation.
 7. Discover the source schema and selected side objects; apply include/exclude
    filters.
@@ -1040,9 +1053,9 @@ values cannot collide. Integers of different widths but equal mathematical
 value compare equal; timestamps normalize to UTC without dropping represented
 precision; binary bytes remain distinct from text.
 
-Validation MUST produce structured deterministic facts even on failure.
-Optional AI triage MAY add hypotheses and remediation but MUST NOT alter pass,
-fail, counts, or evidence.
+Validation MUST produce structured deterministic facts even on failure. Stage 5
+does not attach operation-specific AI triage; any future advisory layer MUST
+NOT alter pass, fail, counts, or evidence.
 
 ## 13. Preflight and operational safety (normative)
 
@@ -1069,8 +1082,9 @@ Passing preflight is not a promise that every runtime permission exists;
 documentation MUST separately state exhaustive minimum privileges.
 
 Signal handling MUST cancel work, stop producing new chunks, attempt required
-final checkpointing within a configurable timeout, and exit with cancellation
-semantics. Hard kill remains recoverable through checkpoints.
+final checkpointing, and exit with cancellation semantics. Hard kill remains
+recoverable through checkpoints. A user-configurable shutdown timeout is not a
+Stage 5 requirement.
 
 ## 14. Deterministic tuning and optional AI (normative)
 
@@ -1097,16 +1111,16 @@ and resource headroom. Safety reductions may override pinned performance values
 when required to prevent protocol or memory failure. Resource growth MUST be
 gated by complete inventory and trustworthy row-width evidence.
 
-AI is optional and advisory. Supported provider families SHOULD include hosted
-Anthropic, OpenAI-compatible, Gemini, and local Ollama/LM Studio endpoints.
-AI MAY:
+AI is optional and advisory. Stage 5 supports only a metadata-only,
+display-only configuration review. `ai runbook` is an alias for that review;
+it is not a distinct operation. Provider failure MUST degrade that advisory
+surface without changing migration correctness.
 
-- advise on unmapped or approximate type metadata;
-- review deterministic preflight;
-- explain deterministic tuning;
-- propose config patches and runbooks;
-- advise on schema drift;
-- triage deterministic validation/failure facts.
+AI MAY, within the Stage 5 surface:
+
+- review supplied deterministic configuration metadata; and
+- explain that metadata without producing a patch or an operation-specific
+  recommendation.
 
 AI MUST NOT:
 
@@ -1116,9 +1130,10 @@ AI MUST NOT:
 - turn an unsupported feature into silent success;
 - be required for ordinary migration.
 
-All AI output MUST be labeled advisory and cached/invalidated separately from
-deterministic evidence. Provider failure MUST degrade the advisory surface
-without changing migration correctness.
+All AI output MUST be labeled advisory. DMTX has no AI cache in Stage 5, so no
+cache invalidation command is exposed. Evals, patch recommendations, distinct
+runbooks, and validate/diagnose/analyze/preflight/schema-drift-specific AI
+hooks are post-Stage-5 additive work and must not be implied by this contract.
 
 ## 15. Security contract (normative)
 
@@ -1142,61 +1157,51 @@ host already compromised by an attacker. Within that threat model it MUST:
   not a full possibly sensitive database error.
 
 Tests MUST inject sentinel secrets through URL DSNs, key/value DSNs, bearer
-headers, API-key shapes, Slack webhook shapes, YAML special characters, and
-driver errors and prove absence from every output surface.
+headers, API-key shapes, YAML special characters, and driver errors and prove
+absence from every shipped output surface. Any future log, metric, trace,
+notification, or provider sink inherits the same redaction requirement before
+it is exposed.
 
 ## 16. Audit, observability, and notifications (normative)
 
+Stage 5 requires sanitized structured progress and terminal outcomes on the
+shipped CLI/API/WebUI surfaces, plus the audit policy below. It does not require
+a separate structured-log subsystem, Prometheus, OTLP, or lifecycle
+notifications. Those are post-Stage-5 additive surfaces and, if implemented,
+inherit the security contract in Section 15.
+
 ### 16.1 Structured logs
 
-Text logs are default; NDJSON is enabled by `--log-format=json`. Every
-structured event MUST include timestamp, level, message, run ID, phase, source
-engine, and target engine when a run is active. Resume events identify resume.
-Stable phase names MUST cover preflight, schema extraction, target preparation,
-transfer, finalization, and validation.
-
-Errors MUST include a stable error class where known. Retries include attempt
-and class. Logs MUST remain scrubbed.
+There is no Stage 5 structured-log format or `--log-format=json` control.
+Shipped progress and terminal outcomes remain sanitized. Any future structured
+log format MUST define its stable fields, retain redaction, and be introduced as
+an additive documented capability.
 
 ### 16.2 Prometheus and OpenTelemetry
 
-Both are opt-in and no-op when disabled.
-
-Prometheus MUST expose, at minimum, rows, estimated bytes, errors by class,
-retries, target chunk-write duration, phase duration, writer queue depth,
-active writers, runtime adjustments, fallback events, and one run identity
-metric. Labels MUST be sufficient to correlate run, table, phase, and engine
-pair without leaving stale per-run gauges after completion.
-
-OTLP/HTTP tracing MUST expose one run/resume root span and child phase spans
-with run ID and engine attributes. Per-chunk spans are optional; the default
-MUST avoid unbounded telemetry.
+Prometheus and OpenTelemetry are not Stage 5 capabilities. A future telemetry
+surface must be opt-in, bounded, redacted, and documented with its correlation
+and cardinality rules before it ships.
 
 ### 16.3 Audit log
 
-Every run/resume writes an append-only NDJSON audit stream unless explicitly
-disabled. It MUST record start/resume, deterministic schema-contract decisions,
-validation completion, checkpoint degradation, delete results where
-applicable, and terminal status including panic/cancellation.
+Every run/resume writes an append-only, SHA-256 hash-linked NDJSON audit stream.
+The Stage 5 policy is mandatory and fail-closed: audit failures prevent
+continuation rather than degrading to a warning. It records start/resume,
+deterministic schema-contract decisions, validation completion, checkpoint
+degradation, applicable delete results, and terminal status including
+panic/cancellation. Each record participates in the monotonic sequence and
+previous-hash chain; this is tamper evidence, not a digital signature.
 
-During a resumable run the file remains appendable. After terminal success,
-accepted/abandoned partial, or hard failure, it becomes read-only where the
-platform permits.
-
-Optional tamper-evident mode MUST add a monotonic sequence, previous hash, and
-SHA-256 hash over canonical event JSON so modification breaks the downstream
-chain. It is tamper evidence, not a digital signature.
-
-An audit-open failure SHOULD warn and allow migration to continue unless a
-future explicit compliance mode requests fail-closed behavior. This degradation
-MUST be visible.
+Stage 5 does not provide audit-disable, optional hash-chain, compliance-mode,
+or warn-and-continue controls. Terminal read-only handling is not a Stage 5
+requirement.
 
 ### 16.4 Notifications
 
-Slack webhook notifications are optional. Start is emitted when either success
-or failure completion notifications are enabled. Completion payloads MUST use
-the same structured run summary as CLI/WebUI and distinguish success, partial,
-failure, rows, duration, and failed tables. Webhook URLs are always scrubbed.
+Slack lifecycle notifications are not a Stage 5 capability. A future
+notification integration must use a redacted summary and meet Section 15 before
+it is exposed.
 
 ## 17. WebUI contract (normative)
 
@@ -1346,9 +1351,11 @@ and resume integration scenarios meet Sections 7 through 13.
 
 ### Stage 5: operator surfaces
 
-Deliver stable CLI help/JSON, terminal UI, embedded WebUI security, metrics,
-tracing, notifications, encrypted profiles, setup, diagnosis, and optional AI
-advisories.
+Deliver stable CLI help, authenticated embedded WebUI security, sanitized
+progress/outcomes, mandatory hash-linked fail-closed audit, encrypted profiles,
+SQLite/PostgreSQL/SQL Server setup, diagnosis, and metadata-only optional AI
+config review. Metrics, tracing, notifications, a structured-log subsystem,
+and expanded AI operations are additive post-Stage-5 work.
 
 Exit criterion: command/front-end parity tests pass, remote-bind safety rejects
 unsafe configurations, and identical command requests produce identical
@@ -1371,8 +1378,10 @@ or accompanied by a reproducible live-database test.
 ### 21.1 Build and public surface
 
 - [ ] One self-contained `dmtx` executable starts on every release platform.
-- [ ] `--version`, help, command aliases, global flags, exit codes, JSON routing,
-      and WebUI launch match Sections 3 and 18. The TUI is deliberately omitted.
+- [ ] `--version`, help, command aliases, supported Stage 5 global controls,
+      exit codes, and WebUI launch match Sections 3 and 18. The TUI is
+      deliberately omitted. JSON/file output selection and the other explicitly
+      deferred automation controls are not Stage 5 criteria.
 - [ ] CLI/WebUI parity is machine-checked.
 - [ ] No AI configuration is needed for build, dry-run, migration, resume, or
       validation.
@@ -1384,9 +1393,10 @@ or accompanied by a reproducible live-database test.
 - [ ] Scalar template expansion survives `#`, colon, newline, quote, and
       backslash secrets without changing YAML structure.
 - [ ] Raw/edit loading preserves templates.
-- [ ] Sentinel passwords, tokens, keys, webhooks, row values, and DSNs are
-      absent from logs, JSON, state, audit, notifications, WebUI responses, and
-      AI payloads on success and failure.
+- [ ] Sentinel passwords, tokens, keys, row values, and DSNs are absent from
+      every shipped CLI/API/WebUI, state, audit, and AI surface on success and
+      failure. Future logs, telemetry, and notification sinks inherit this
+      criterion before exposure.
 - [ ] Private files/directories have restrictive platform permissions.
 - [ ] A cgroup/container memory-limit fixture cannot inherit unsafe host memory.
 
@@ -1521,8 +1531,10 @@ For each engine:
       skippable without disappearing.
 - [ ] SIGINT/SIGTERM cancels, flushes within timeout when possible, and leaves
       a resumable truthful run.
-- [ ] Structured logs, metrics, traces, progress JSON, audit, and notifications
-      correlate by run ID and contain no secrets or row content.
+- [ ] Shipped progress, terminal outcomes, and mandatory hash-linked audit
+      records contain no secrets or row content. Future structured logs,
+      metrics, traces, and notifications inherit the same requirement before
+      exposure.
 - [ ] Tampering with any chained audit event breaks verification.
 - [ ] WebUI loopback, token exchange, cookies, bearer auth, TLS/non-loopback
       gate, brute-force limit, trusted proxy handling, DNS rebinding defense,
@@ -1582,7 +1594,7 @@ These are possible ways to organize the work, not requirements:
   makes unsupported behavior explicit.
 - A catalog can hold declarative quoting, discovery, pagination, and context
   facts while imperative native bulk/snapshot operations remain code.
-- A single orchestrator service reused by CLI/TUI/WebUI prevents behavioral
+- A single orchestrator service reused by CLI/WebUI prevents behavioral
   drift.
 - State mutation commands can carry a lease token/generation so fencing is hard
   to omit.
@@ -1593,7 +1605,7 @@ These are possible ways to organize the work, not requirements:
 - A deterministic fault-injection layer around database writes and state writes
   pays for itself early.
 - Keep human rendering outside deterministic fact collection so text, JSON,
-  TUI, WebUI, AI, and audit reuse one result model.
+  WebUI, AI, and audit reuse one result model.
 
 Equivalent or better designs are encouraged.
 
@@ -1606,7 +1618,7 @@ or internal architecture.
 
 The reference snapshot organizes responsibilities into configuration/secrets,
 catalog-driven drivers, schema planning/rendering, orchestration, transfer,
-checkpointing, tuning, validation, audit/observability, command services,
-terminal UI, and embedded WebUI. This logical decomposition informed the
+checkpointing, tuning, validation, audit/observability, command services, and
+embedded WebUI. This logical decomposition informed the
 contracts above; its exact package layout is intentionally not part of the
 requirements.

@@ -51,8 +51,10 @@ func NewSetupForEngine(configPath, engineName string) (SetupFlow, error) {
 		return NewSetup(configPath), nil
 	case "postgres", "postgresql":
 		return NewPostgresSetup(configPath), nil
+	case "mssql", "sqlserver", "sql-server":
+		return NewMSSQLSetup(configPath), nil
 	default:
-		return nil, newSetupStartError("unsupported setup engine; choose sqlite or postgres")
+		return nil, newSetupStartError("unsupported setup engine; choose sqlite, postgres, or sqlserver")
 	}
 }
 
@@ -101,6 +103,8 @@ func newSetupForProfileData(profileName, configPath, engineName string, data []b
 		return newSetupFromConfig(configPath, cfg)
 	case "postgres", "postgresql":
 		return newPostgresSetupFromConfig(configPath, cfg)
+	case "mssql", "sqlserver", "sql-server":
+		return newMSSQLSetupFromConfig(configPath, cfg)
 	default:
 		return nil, newSetupStartError("saved profile uses an unsupported setup engine")
 	}
@@ -465,7 +469,10 @@ func (setup *PostgresSetup) persist() error {
 			return errors.New("create configuration directory")
 		}
 	}
-	if err := writeRestricted(absolute, string(data)); err != nil {
+	if err := writeSetupConfigurationNew(absolute, string(data)); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return errors.New("configuration already exists; choose another path")
+		}
 		return errors.New("write configuration")
 	}
 	cleanup = false

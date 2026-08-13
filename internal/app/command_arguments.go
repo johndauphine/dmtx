@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -386,7 +388,10 @@ func parseProfileArguments(args []string) (Request, error) {
 	action := args[0]
 	parsed, err := parseCommandArguments(commandArgumentSpec{
 		command: "profile " + action,
-		values:  map[string]string{"--config": "config"},
+		values: map[string]string{
+			"--config":          "config",
+			"--passphrase-file": "passphrase-file",
+		},
 	}, args[1:])
 	if err != nil {
 		return Request{}, err
@@ -405,7 +410,7 @@ func parseProfileArguments(args []string) (Request, error) {
 			Command: "profile", ProfileAction: "delete", ProfileName: parsed.positionals[0],
 		}, nil
 	case "save":
-		if len(parsed.positionals) < 1 || len(parsed.positionals) > 2 || parsed.positionals[0] == "" {
+		if len(parsed.positionals) < 1 || len(parsed.positionals) > 2 || parsed.positionals[0] == "" || parsed.values["passphrase-file"] != "" {
 			return Request{}, fmt.Errorf("/profile save: expected NAME [CONFIG]")
 		}
 		configPath := parsed.values["config"]
@@ -423,19 +428,53 @@ func parseProfileArguments(args []string) (Request, error) {
 			ProfileName: parsed.positionals[0], ConfigPath: configPath,
 		}, nil
 	case "export":
-		if len(parsed.values) != 0 || len(parsed.positionals) < 1 || len(parsed.positionals) > 2 || parsed.positionals[0] == "" {
-			return Request{}, fmt.Errorf("/profile export: expected NAME [OUTPUT]")
+		if len(parsed.positionals) < 1 || len(parsed.positionals) > 2 || parsed.positionals[0] == "" || parsed.values["config"] != "" || parsed.values["passphrase-file"] == "" {
+			return Request{}, fmt.Errorf("/profile export: expected NAME [OUTPUT] --passphrase-file PATH")
 		}
-		outputPath := "config.yaml"
+		outputPath := defaultProfileExportPath(parsed.positionals[0])
 		if len(parsed.positionals) == 2 {
 			outputPath = parsed.positionals[1]
 		}
 		return Request{
-			Command: "profile", ProfileAction: "export", ProfileName: parsed.positionals[0], OutputPath: outputPath,
+			Command: "profile", ProfileAction: "export", ProfileName: parsed.positionals[0], OutputPath: outputPath, PassphraseFile: parsed.values["passphrase-file"],
+		}, nil
+	case "import":
+		if len(parsed.positionals) != 2 || parsed.positionals[0] == "" || parsed.positionals[1] == "" || parsed.values["config"] != "" || parsed.values["passphrase-file"] == "" {
+			return Request{}, fmt.Errorf("/profile import: expected NAME INPUT --passphrase-file PATH")
+		}
+		return Request{
+			Command: "profile", ProfileAction: "import", ProfileName: parsed.positionals[0], OutputPath: parsed.positionals[1], PassphraseFile: parsed.values["passphrase-file"],
 		}, nil
 	default:
 		return Request{}, fmt.Errorf("/profile: unknown action %q (see /help)", action)
 	}
+}
+
+// defaultProfileExportPath deliberately never reuses config.yaml: a portable
+// profile is an encrypted JSON envelope, not a migration configuration. Names
+// that are already safe file stems remain recognisable; every other name gets
+// a bounded, path-safe digest rather than being interpreted as a path.
+func defaultProfileExportPath(name string) string {
+	if safeProfileExportStem(name) {
+		return name + ".dmtx-profile.json"
+	}
+	sum := sha256.Sum256([]byte(name))
+	return "profile-" + hex.EncodeToString(sum[:]) + ".dmtx-profile.json"
+}
+
+func safeProfileExportStem(name string) bool {
+	if name == "" || name == "." || name == ".." || len(name) > 200 {
+		return false
+	}
+	for _, character := range name {
+		if (character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') &&
+			character != '.' && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseInitArguments(args []string) (Request, error) {

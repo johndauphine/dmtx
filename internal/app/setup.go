@@ -248,8 +248,52 @@ func (setup *Setup) persist() error {
 			return errors.New("create configuration directory")
 		}
 	}
-	if err := writeRestricted(setup.configPath, string(data)); err != nil {
+	if err := writeSetupConfigurationNew(setup.configPath, string(data)); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return errors.New("configuration already exists; choose another path")
+		}
 		return errors.New("write configuration")
 	}
+	return nil
+}
+
+// writeSetupConfigurationNew creates the final guided-setup configuration
+// exactly once. Unlike init, a setup flow has promised not to overwrite an
+// existing configuration, so O_EXCL is required to uphold that promise across
+// the check-and-write race (including a dangling symlink). The mode is set on
+// both creation and the descriptor to remain owner-only under a permissive
+// umask. A failed partial write is removed only when the path still names the
+// object this invocation created.
+func writeSetupConfigurationNew(path, contents string) (err error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	created, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		return statErr
+	}
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		_ = file.Close()
+		current, currentErr := os.Lstat(path)
+		if currentErr == nil && os.SameFile(created, current) {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := file.WriteString(contents); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	success = true
 	return nil
 }

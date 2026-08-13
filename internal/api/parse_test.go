@@ -308,7 +308,7 @@ func TestParseAnswersTheLinesThatAnswerThemselves(t *testing.T) {
 		{"version", app.Version},
 		{"help", "dmtx"},
 		{"--help", "dmtx"},
-		{"", "DMTX terminal UI is planned"},
+		{"", "DMTX has no terminal UI; use dmtx serve for the WebUI or --help for CLI commands."},
 		{"nonsense-command", "nonsense-command"},
 	} {
 		t.Run(testCase.line, func(t *testing.T) {

@@ -79,7 +79,7 @@ func TestPostgresSetupUsesProtectedPasswordOrigins(t *testing.T) {
 
 func TestSetupStartErrorMessagesAreActionableAndRedacted(t *testing.T) {
 	_, err := NewSetupForEngine("", "oracle")
-	if got := SetupStartErrorMessage(err); got != "unsupported setup engine; choose sqlite or postgres" {
+	if got := SetupStartErrorMessage(err); got != "unsupported setup engine; choose sqlite, postgres, or sqlserver" {
 		t.Fatalf("unsupported engine message = %q", got)
 	}
 	if got := SetupStartErrorMessage(profileSetupLoadError(sql.ErrNoRows)); got != "saved profile was not found" {

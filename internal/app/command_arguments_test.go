@@ -96,8 +96,18 @@ func TestDMTArgumentSyntaxBuildsCanonicalRequests(t *testing.T) {
 		},
 		{
 			name: "profile export output",
-			args: []string{"profile", "export", "prod", "@portable.yaml"},
-			want: Request{Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: "portable.yaml"},
+			args: []string{"profile", "export", "prod", "@portable.json", "--passphrase-file=secret"},
+			want: Request{Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: "portable.json", PassphraseFile: "secret"},
+		},
+		{
+			name: "profile export default is portable envelope",
+			args: []string{"profile", "export", "prod", "--passphrase-file=secret"},
+			want: Request{Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: "prod.dmtx-profile.json", PassphraseFile: "secret"},
+		},
+		{
+			name: "profile import",
+			args: []string{"profile", "import", "prod", "@portable.json", "--passphrase-file", "secret"},
+			want: Request{Command: "profile", ProfileAction: "import", ProfileName: "prod", OutputPath: "portable.json", PassphraseFile: "secret"},
 		},
 	}
 
@@ -149,6 +159,7 @@ func TestHelpAndUsageAdvertiseAcceptedDMTForms(t *testing.T) {
 	for _, expected := range []string{
 		"/run [CONFIG", "--skip-preflight LIST|all", "/resume [CONFIG",
 		"/preflight|/health-check", "[-d|--detailed]", "[--force|-f] [--with-ai]",
+		"--passphrase-file PATH (default: NAME.dmtx-profile.json)",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Errorf("help missing %q", expected)
@@ -163,6 +174,7 @@ func TestHelpAndUsageAdvertiseAcceptedDMTForms(t *testing.T) {
 		{[]string{"resume", "--unknown"}, "[--skip-preflight LIST|all]"},
 		{[]string{"preflight", "--unknown"}, "[--skip-preflight LIST|all]"},
 		{[]string{"init-secrets", "--unknown"}, "[--force|-f] [--with-ai]"},
+		{[]string{"profile", "export", "prod"}, "default: NAME.dmtx-profile.json"},
 	} {
 		_, outcome, dispatched := ParseRequest(test.args)
 		if dispatched || len(outcome.Messages) != 1 || !strings.Contains(outcome.Messages[0].Text, test.want) {
