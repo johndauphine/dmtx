@@ -605,6 +605,7 @@ func runSQLiteToSQLite(
 	observer TableObserver,
 	resume bool,
 ) (Result, error) {
+	observeMigrationPhase(observer, "preflight")
 	if err := requireStage4UpsertMergeComposition(cfg, false); err != nil {
 		return Result{}, err
 	}
@@ -655,6 +656,7 @@ func runSQLiteToSQLite(
 	target.SetMaxOpenConns(1)
 	target.SetMaxIdleConns(1)
 
+	observeMigrationPhase(observer, "schema_extraction")
 	names, err := userTables(ctx, source)
 	if err != nil {
 		return Result{}, err
@@ -725,7 +727,9 @@ func runSQLiteToSQLite(
 				return result, err
 			}
 		}
+		observeMigrationPhase(observer, "target_preparation")
 		var copied int
+		observeMigrationPhase(observer, "transfer")
 		if resume && settings.targetMode == "upsert" && hasLegacyProgress {
 			copied, err = copyTable(
 				ctx, source, target, name, settings.targetMode, observer, tableProgress, true,
@@ -742,6 +746,7 @@ func runSQLiteToSQLite(
 		}
 		rowsDone := tableProgress.RowsDone + copied
 		result.Rows += rowsDone
+		observeMigrationPhase(observer, "validation")
 		if err := validateCount(ctx, source, target, name, settings.targetMode); err != nil {
 			return result, err
 		}
@@ -814,6 +819,7 @@ func copySQLitePlannedTable(
 		return copied, err
 	}
 	if created || finalizeExisting {
+		observeMigrationPhase(observer, "finalization")
 		if err := finalizeSQLiteTarget(ctx, target, planned.table, observer); err != nil {
 			return copied, err
 		}
@@ -991,6 +997,7 @@ func executeSQLiteTransferPlan(
 	go func() {
 		defer close(acknowledgements)
 		for chunk := range chunks {
+			observeWriterQueueDepth(observer, len(chunks))
 			if pipelineCtx.Err() != nil {
 				chunk.release()
 				continue
@@ -1036,6 +1043,13 @@ func executeSQLiteTransferPlan(
 				&observerMu,
 				sqliteRetryPolicy(settings.maxRetries),
 			)
+			if err == nil {
+				var retainedBytes int64
+				for _, reservation := range chunk.reservations {
+					retainedBytes += reservation.bytes
+				}
+				observePayloadBytes(observer, planned.table.Name, retainedBytes)
+			}
 			chunk.release()
 			if err != nil {
 				fail(err)
@@ -1557,6 +1571,7 @@ func emitSQLiteBufferedChunk(
 		chunk.release()
 		return ctx.Err()
 	case output <- chunk:
+		observeWriterQueueDepth(observer, len(output))
 		return nil
 	}
 }

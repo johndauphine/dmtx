@@ -94,6 +94,20 @@ var endpointYAMLFields = map[string]struct{}{
 	"tls_ca_file": {},
 }
 
+var observabilityYAMLFields = map[string]migrationYAMLKind{
+	"log_format":        migrationYAMLNonBlank,
+	"prometheus_bind":   migrationYAMLNonBlank,
+	"otlp_endpoint":     migrationYAMLNonBlank,
+	"otlp_timeout":      migrationYAMLDuration,
+	"max_metric_series": migrationYAMLInt,
+}
+
+var slackYAMLFields = map[string]migrationYAMLKind{
+	"webhook_url":    migrationYAMLNonBlank,
+	"notify_success": migrationYAMLBool,
+	"notify_failure": migrationYAMLBool,
+}
+
 func inspectMigrationYAML(
 	data []byte,
 ) (map[string]*yaml.Node, map[string]struct{}, error) {
@@ -163,7 +177,7 @@ func inspectMigrationYAML(
 			); err != nil {
 				return nil, nil, err
 			}
-		case "profile", "ai", "slack":
+		case "profile", "ai":
 			if isNullYAML(value) {
 				return nil, nil, fmt.Errorf(
 					"%s must be a mapping, not null",
@@ -172,6 +186,20 @@ func inspectMigrationYAML(
 			}
 			if value.Kind != yaml.MappingNode {
 				return nil, nil, fmt.Errorf("%s must be a mapping", key)
+			}
+		case "observability":
+			if isNullYAML(value) || value.Kind != yaml.MappingNode {
+				return nil, nil, fmt.Errorf("observability must be a mapping")
+			}
+			if err := inspectYAMLMapping("observability", value, observabilityYAMLFields, nil, nil); err != nil {
+				return nil, nil, err
+			}
+		case "slack":
+			if isNullYAML(value) || value.Kind != yaml.MappingNode {
+				return nil, nil, fmt.Errorf("slack must be a mapping")
+			}
+			if err := inspectYAMLMapping("slack", value, slackYAMLFields, nil, nil); err != nil {
+				return nil, nil, err
 			}
 		default:
 			return nil, nil, fmt.Errorf(
@@ -254,9 +282,13 @@ func inspectYAMLMapping(
 		}
 		field := prefix + "." + key
 		path := strings.TrimPrefix(field, "migration.")
-		explicit[path] = struct{}{}
+		if explicit != nil {
+			explicit[path] = struct{}{}
+		}
 		if prefix == "migration" {
-			topLevel[key] = value
+			if topLevel != nil {
+				topLevel[key] = value
+			}
 		}
 		if err := inspectYAMLValue(field, value, kind, topLevel, explicit); err != nil {
 			return err

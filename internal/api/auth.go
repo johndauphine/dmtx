@@ -5,13 +5,22 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // sessionCookie names the cookie exchanged for the launch token.
 const sessionCookie = "dmtx_session"
+
+const (
+	sessionLifetime  = 8 * time.Hour
+	failedAuthLimit  = 8
+	failedAuthWindow = time.Minute
+)
 
 // newToken returns a hex-encoded cryptographically random secret.
 //
@@ -39,9 +48,17 @@ func newToken() (string, error) {
 // long as the server ran. Describing it as one-time while accepting it forever
 // is the kind of claim this codebase keeps finding in its own tests.
 type authenticator struct {
-	mutex   sync.Mutex
-	launch  string
-	session string
+	mutex         sync.Mutex
+	launch        string
+	session       string
+	sessionIssued time.Time
+	host          string
+	failures      map[string]authFailure
+}
+
+type authFailure struct {
+	count int
+	until time.Time
 }
 
 // grant exchanges a correct launch token for a session cookie and redirects to
@@ -51,36 +68,47 @@ type authenticator struct {
 // bar, so it does not sit in browser history or get copied out of a screenshot
 // when an operator shares one.
 func (auth *authenticator) grant(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Referrer-Policy", "no-referrer")
 	supplied := request.URL.Query().Get("token")
-	if !auth.redeem(supplied) {
+	session, ok := auth.redeemSession(supplied)
+	if !ok {
 		http.Error(writer, "invalid or missing token", http.StatusUnauthorized)
 		return
 	}
 	http.SetCookie(writer, &http.Cookie{
 		Name:     sessionCookie,
-		Value:    auth.session,
+		Value:    session,
 		Path:     "/",
 		HttpOnly: true,
 		// Strict rather than Lax: no cross-site navigation should ever arrive
 		// carrying this session, because every route behind it can start or
 		// abandon a migration.
 		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(sessionLifetime.Seconds()),
 		// Not Secure: the server is loopback-only plaintext by design, and a
 		// Secure cookie would simply never be sent.
 	})
 	http.Redirect(writer, request, "/", http.StatusFound)
 }
 
-// redeem consumes the launch token. It succeeds at most once: the second
-// caller, whoever they are, finds nothing to redeem.
-func (auth *authenticator) redeem(supplied string) bool {
+func (auth *authenticator) redeemSession(supplied string) (string, bool) {
+	replacement, err := newToken()
+	if err != nil {
+		return "", false
+	}
 	auth.mutex.Lock()
 	defer auth.mutex.Unlock()
 	if !constantTimeEqual(supplied, auth.launch) {
-		return false
+		return "", false
 	}
 	auth.launch = ""
-	return true
+	// A successful launch redemption establishes a new single-operator
+	// session. Rotating rather than merely refreshing a timestamp prevents an
+	// old cookie from inheriting a later login's absolute lifetime.
+	auth.session = replacement
+	auth.sessionIssued = time.Now()
+	return replacement, true
 }
 
 // remint issues a replacement launch token, so a second invocation can be sent
@@ -104,7 +132,9 @@ func (auth *authenticator) remint() (string, error) {
 
 // holdsSession reports whether a value is the session secret.
 func (auth *authenticator) holdsSession(supplied string) bool {
-	return constantTimeEqual(supplied, auth.session)
+	auth.mutex.Lock()
+	defer auth.mutex.Unlock()
+	return !auth.sessionIssued.IsZero() && time.Since(auth.sessionIssued) <= sessionLifetime && constantTimeEqual(supplied, auth.session)
 }
 
 // constantTimeEqual compares without returning early on the first differing
@@ -122,17 +152,86 @@ func constantTimeEqual(supplied, expected string) bool {
 // parity tests can call the API without pretending to be a browser.
 func (auth *authenticator) require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if cookie, err := request.Cookie(sessionCookie); err == nil &&
-			auth.holdsSession(cookie.Value) {
-			next.ServeHTTP(writer, request)
-			return
+		peer := peerIdentity(request)
+		cookieAuthenticated := false
+		if cookie, err := request.Cookie(sessionCookie); err == nil && auth.holdsSession(cookie.Value) {
+			cookieAuthenticated = true
 		}
 		header := request.Header.Get("Authorization")
-		if supplied, found := strings.CutPrefix(header, "Bearer "); found &&
-			auth.holdsSession(supplied) {
+		bearerAuthenticated := false
+		if supplied, found := strings.CutPrefix(header, "Bearer "); found && auth.holdsSession(supplied) {
+			bearerAuthenticated = true
+		}
+		if cookieAuthenticated || bearerAuthenticated {
+			// The listener itself only accepts loopback peers. Restricting Host
+			// and Origin validation to that served transport keeps in-process
+			// httptest route checks from pretending to be a network boundary.
+			if loopbackPeer(request) && (!auth.validHost(request.Host) || (auth.host != "" && cookieAuthenticated && unsafeMethod(request.Method) && !sameOrigin(request, auth.host))) {
+				writer.Header().Set("Cache-Control", "no-store")
+				writeJSON(writer, http.StatusForbidden, map[string]string{"error": "request origin is not permitted"})
+				return
+			}
+			auth.clearFailure(peer)
+			writer.Header().Set("Cache-Control", "no-store")
 			next.ServeHTTP(writer, request)
 			return
 		}
-		http.Error(writer, "authentication required", http.StatusUnauthorized)
+		writer.Header().Set("Cache-Control", "no-store")
+		if retry := auth.recordFailure(peer); retry > 0 {
+			writer.Header().Set("Retry-After", strconv.Itoa(retry))
+			writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "too many failed authentication attempts"})
+			return
+		}
+		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 	})
+}
+
+func peerIdentity(request *http.Request) string {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	if request.RemoteAddr != "" {
+		return request.RemoteAddr
+	}
+	return "unknown"
+}
+
+func loopbackPeer(request *http.Request) bool {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	return err == nil && net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
+}
+
+func (auth *authenticator) recordFailure(peer string) int {
+	auth.mutex.Lock()
+	defer auth.mutex.Unlock()
+	now := time.Now()
+	failure := auth.failures[peer]
+	if now.Before(failure.until) {
+		return int(time.Until(failure.until).Seconds()) + 1
+	}
+	failure.count++
+	if failure.count >= failedAuthLimit {
+		failure.until = now.Add(failedAuthWindow)
+		failure.count = 0
+		auth.failures[peer] = failure
+		return int(failedAuthWindow.Seconds())
+	}
+	auth.failures[peer] = failure
+	return 0
+}
+
+func (auth *authenticator) clearFailure(peer string) {
+	auth.mutex.Lock()
+	defer auth.mutex.Unlock()
+	delete(auth.failures, peer)
+}
+
+func (auth *authenticator) validHost(host string) bool { return auth.host == "" || host == auth.host }
+func unsafeMethod(method string) bool {
+	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
+}
+func sameOrigin(request *http.Request, host string) bool {
+	origin := request.Header.Get("Origin")
+	return origin == "http://"+host
 }

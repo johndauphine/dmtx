@@ -21,6 +21,7 @@ func resumeWithStage4Adapters(
 	mode string,
 	run Stage4RunContext,
 ) (Result, error) {
+	observeMigrationPhase(observer, "preflight")
 	if _, err := requireStage4TableSetObserver(observer); err != nil {
 		return Result{}, err
 	}
@@ -40,6 +41,7 @@ func resumeWithStage4Adapters(
 	); err != nil {
 		return Result{}, err
 	}
+	observeMigrationPhase(observer, "schema_extraction")
 	prepared, err := prepareStage4AdapterRun(
 		ctx,
 		cfg,

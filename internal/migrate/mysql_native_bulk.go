@@ -430,6 +430,7 @@ func (writer *mysqlNativeWriter) useMySQLStrictInsertFallback(
 		return
 	}
 	writer.localInfile = mysqlLocalInfileFallback
+	writer.fallbacks.Add(1)
 	if writer.warn != nil {
 		writer.warn(warning)
 	}

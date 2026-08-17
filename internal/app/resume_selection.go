@@ -35,6 +35,9 @@ func validResumeOptions(options resumeOptions) (resumeOptions, bool) {
 		options.abandon && (options.forceResume || options.destructiveAcknowledged) {
 		return resumeOptions{}, false
 	}
+	if options.abandon && ValidateOperatorText(options.abandonReason) != nil {
+		return resumeOptions{}, false
+	}
 	if options.statePath == "" {
 		if options.configPath == "" {
 			return resumeOptions{}, false

@@ -804,6 +804,7 @@ func (wave stage4AdapterNetworkWave) callbacks(
 				fmt.Sprintf("range/%d", globalIndex)
 			return base.Checkpoint(ctx, checkpoint)
 		},
+		Telemetry: base.Telemetry,
 	}, nil
 }
 

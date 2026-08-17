@@ -308,13 +308,15 @@ func (execution *stage4AdapterNetworkTableExecution) callbacks(
 				return networkStateFailedReceipt(request), err
 			}
 			request.Range = global
-			return writeStage4AdapterNetworkPage(
+			receipt, err := writeStage4AdapterNetworkPage(
 				writeCtx,
 				execution.parent.target,
 				execution.ranges,
 				execution.corePlan.ReplayMode,
 				request,
 			)
+			observeFallbackEvents(observer, execution.parent.target)
+			return receipt, err
 		},
 	)
 	return NetworkTransferCallbacks{
@@ -360,6 +362,7 @@ func (execution *stage4AdapterNetworkTableExecution) callbacks(
 		WritePage:    write,
 		RecordIssued: execution.coordinator.recordIssued,
 		Checkpoint:   execution.coordinator.checkpoint,
+		Telemetry:    networkTelemetryCallback(observer),
 	}
 }
 

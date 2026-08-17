@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/schema"
@@ -317,6 +318,7 @@ func migrateWithAdaptersAdmission(
 	mode string,
 	stage4 stage4AdapterAdmission,
 ) (Result, error) {
+	observeMigrationPhase(observer, "preflight")
 	if err := requireStage4UpsertMergeComposition(cfg, stage4.enabled); err != nil {
 		return Result{}, err
 	}
@@ -331,6 +333,7 @@ func migrateWithAdaptersAdmission(
 			stage4.run,
 		)
 	}
+	observeMigrationPhase(observer, "schema_extraction")
 	names, err := source.ListTables(ctx)
 	if err != nil {
 		return Result{}, err
@@ -396,6 +399,7 @@ func migrateWithAdaptersAdmission(
 		}
 	}
 
+	observeMigrationPhase(observer, "target_preparation")
 	if _, err := protectAdapterTargetMutationOnce(
 		ctx,
 		observer,
@@ -407,6 +411,7 @@ func migrateWithAdaptersAdmission(
 		return Result{}, err
 	}
 
+	observeMigrationPhase(observer, "transfer")
 	copiedRows := make([]int, len(plans))
 	for index, plan := range plans {
 		name := plan.source.Name
@@ -432,6 +437,7 @@ func migrateWithAdaptersAdmission(
 		if err != nil {
 			return Result{}, err
 		}
+		observeMigrationPhase(observer, "validation")
 		if err := validateAdapterCount(
 			ctx,
 			source,
@@ -445,6 +451,7 @@ func migrateWithAdaptersAdmission(
 		copiedRows[index] = copied
 	}
 
+	observeMigrationPhase(observer, "finalization")
 	if _, err := protectAdapterTargetMutationOnce(
 		ctx,
 		observer,
@@ -800,6 +807,7 @@ func writeAdapterBatch(
 		Certainty:     CommitNotCommitted,
 		AttemptedRows: attempted,
 	}
+	started := time.Now()
 	mutationCalls, writeErr := protectAdapterTargetMutationOnce(
 		ctx,
 		observer,
@@ -816,6 +824,10 @@ func writeAdapterBatch(
 			return err
 		},
 	)
+	observeFallbackEvents(observer, target)
+	// Composed non-network routes execute this call synchronously; one is the
+	// actual target writer for precisely this attempted batch.
+	observeTargetWriteTelemetry(observer, TargetWriteTelemetry{Table: table.Name, Duration: time.Since(started), ActiveWriters: 1, QueueDepth: -1})
 	if mutationCalls != 1 {
 		return receipt, writeErr
 	}

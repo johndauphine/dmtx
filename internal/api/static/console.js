@@ -28,6 +28,7 @@ const historyKey = "dmtx-console-history-v2";
 const maxRenderedRuns = 50;
 const maxRenderedFieldLength = 512;
 const maxProgressTableNames = 12;
+const maxTranscriptEntries = 100;
 
 let commands = [];
 let displayed = [];
@@ -43,17 +44,35 @@ let setupMasked = false;
 const watchedJobs = new Set();
 let transcriptLines = [];
 
+if ("serviceWorker" in navigator) {
+  let workerURL = "/sw.js";
+  if (window.trustedTypes) {
+    workerURL = window.trustedTypes.createPolicy("dmtx-service-worker", {
+      createScriptURL: value => value === "/sw.js" ? value : "",
+    }).createScriptURL(workerURL);
+  }
+  navigator.serviceWorker.register(workerURL).catch(() => {
+    // Offline enhancement is optional; a failed registration must not affect
+    // the authenticated console or any migration job.
+  });
+}
+
 function jobURL(id) { return apiRoutes.jobs + "/" + encodeURIComponent(id); }
 function jobEventsURL(id) { return jobURL(id) + "/events"; }
 function jobCancelURL(id) { return jobURL(id) + "/cancel"; }
 
 function appendTranscript(value, kind = "") {
-  const text = String(value);
+  const raw = String(value);
+  const text = raw.length > maxRenderedFieldLength * 8
+    ? raw.slice(0, maxRenderedFieldLength * 8) + "\n[output truncated]"
+    : raw;
   const entry = document.createElement("pre");
   entry.className = "transcript-line" + (kind ? " transcript-" + kind : "");
   entry.textContent = text;
   transcript.append(entry);
   transcriptLines.push(text);
+  while (transcript.children.length > maxTranscriptEntries) transcript.firstElementChild.remove();
+  while (transcriptLines.length > maxTranscriptEntries) transcriptLines.shift();
 }
 
 function setStatus(value) { status.textContent = String(value); }
@@ -607,7 +626,8 @@ function loadHistory() {
   try {
     const saved = JSON.parse(localStorage.getItem(historyKey) || "[]");
     if (!Array.isArray(saved)) return [];
-    return [...new Set(saved.filter(entry => typeof entry === "string" && entry.trim() && !isSetupInvocation(entry)))].slice(0, 50);
+    return [...new Set(saved.filter(entry => typeof entry === "string" && entry.trim() && !isSetupInvocation(entry) &&
+      !/(--request\b|--abandon-reason\b|pass(?:word)?|secret|token|credential|\bdsn\b|private[ _-]?key)/i.test(entry)))].slice(0, 50);
   } catch (_) {
     return [];
   }
@@ -769,6 +789,7 @@ async function updateSuggestions() {
 }
 
 function remember(typed) {
+	if (!isRecallSafe(typed)) return;
   history = [typed, ...history.filter(entry => entry !== typed)].slice(0, 50);
   try {
     localStorage.setItem(historyKey, JSON.stringify(history));
@@ -776,6 +797,16 @@ function remember(typed) {
     // Local recall is a convenience. A browser with disabled storage still has
     // the bounded in-memory history for this console session.
   }
+}
+
+function isRecallSafe(value) {
+  const parsed = consoleWords(value);
+  const words = parsed.words || [];
+  if (!words.length) return false;
+  const command = words[0].replace(/^\//, "").toLowerCase();
+  if (!commands.some(item => item.name === command || (item.aliases || []).includes(command))) return false;
+  if (["setup", "init-secrets"].includes(command)) return false;
+  return !/(--request\b|--abandon-reason\b|pass(?:word)?|secret|token|credential|\bdsn\b|private[ _-]?key)/i.test(value);
 }
 
 function recallHistory() {
@@ -929,7 +960,7 @@ function displaySession(defaults) {
     if (!item) continue;
     const key = payloadText(item, "key");
     if (!key) continue;
-    const value = payloadText(item, "value") || "(unset)";
+    const value = item.set === true ? "(set)" : "(unset)";
     const description = payloadText(item, "description");
     lines.push("  " + (key === "state" ? "state-file" : key) + " = " + value + (description ? " — " + description : ""));
   }
@@ -958,7 +989,7 @@ async function localSession(words) {
     for (const entry of defaults) {
       const item = payloadRecord(entry);
       const key = payloadText(item, "key");
-      if (key && payloadText(item, "value")) {
+      if (key && item.set === true) {
         await request(apiRoutes.session + "/" + encodeURIComponent(key), undefined, "DELETE");
       }
     }
@@ -970,7 +1001,7 @@ async function localSession(words) {
   const key = sessionAPIKey(words[1]);
   const value = words.slice(2).join(" ");
   await request(apiRoutes.session, { key, value });
-  appendTranscript("Session default set: " + words[1] + " = " + value);
+  appendTranscript("Session default set: " + words[1] + ".");
   setStatus("Session default set.");
 }
 
@@ -1166,7 +1197,7 @@ form.addEventListener("submit", async event => {
   historyIndex = -1;
   closePalette();
   setStatus(setupActive ? "Sending setup response." : "Submitting command.");
-  appendTranscript("> " + (setupActive && setupMasked ? "[REDACTED]" : typed), "command");
+	if (setupActive) appendTranscript("> " + (setupMasked ? "[REDACTED]" : typed), "command");
   try {
     if (setupActive) {
       const prompt = await request(apiRoutes.setupInput, { input: typed });
@@ -1194,6 +1225,7 @@ form.addEventListener("submit", async event => {
       return;
     }
     const started = await request(apiRoutes.jobs, parsed.request);
+	    appendTranscript("> /" + started.command, "command");
     appendTranscript("Started " + started.command + ".");
     setStatus("Started " + started.command + ".");
     watch(started.id);

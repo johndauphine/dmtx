@@ -124,6 +124,16 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 	if err := appLifecycleBoundary("resume_candidate_selected"); err != nil {
 		return out.failWith(StateError, "resume lifecycle: "+err.Error())
 	}
+	operatorTerminal := operatorSummary(run.ID, "resume", cfg, time.Now().UTC())
+	operatorTerminal.Outcome, operatorTerminal.Resumable = "failed", true
+	operator := startOperatorSink(cfg, operatorTerminal)
+	var result migrate.Result
+	defer func() {
+		reportRuntimeTuningMetrics(operator, result)
+		operatorTerminal.Rows, operatorTerminal.Tables = int64(result.Rows), int64(result.Tables)
+		operatorTerminal.EndedAt = time.Now().UTC()
+		operator.Finish(operatorTerminal)
+	}()
 
 	cfg.Migration.DestructiveAcknowledged = options.destructiveAcknowledged
 	leaseStore, lease, err := acquireTargetLease(cfg.Target, run.ID)
@@ -269,11 +279,11 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 			spoolDirectory: spoolDirectory,
 			configPath:     configPath,
 			progress:       reporter,
+			operator:       operator,
 		},
 		existing: existing,
 	}
 	migrationContext, heartbeat := startLeaseHeartbeat(migrationContext, guard, 30*time.Second)
-	var result migrate.Result
 	if cfg.Source.Type == "sqlite" && cfg.Target.Type == "sqlite" {
 		result, err = migrate.SQLiteToSQLiteResumeWithProgress(
 			migrationContext,
@@ -300,6 +310,9 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 	}
 	if err != nil {
 		disposition := migrationAttemptDisposition(result, err, cfg.Migration)
+		operatorTerminal.Outcome = string(disposition.outcome)
+		operatorTerminal.Resumable = disposition.resumable
+		operatorTerminal.ErrorClass = string(migrate.ClassifyTransferError(err))
 		endedAt := time.Now().UTC()
 		if stateErr := persistAttemptDisposition(
 			store, run.ID, disposition, err.Error(), endedAt,
@@ -360,6 +373,7 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 	if err := out.setPayload(PayloadResult, result); err != nil {
 		return out.failWith(FileError, "write result: "+err.Error())
 	}
+	operatorTerminal.Outcome, operatorTerminal.Resumable = "success", false
 	return out.done(Success)
 }
 

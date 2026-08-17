@@ -41,7 +41,7 @@ func executeInitSecrets(request Request) Outcome {
 
 	out.out("wrote " + path)
 	reportDirectory(out, path)
-	out.out("nothing reads it yet; it is here so its protections exist first")
+	out.out("protected storage is ready for encrypted profiles and optional AI credentials")
 	return out.done(Success)
 }
 

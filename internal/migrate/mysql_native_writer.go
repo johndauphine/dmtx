@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/johndauphine/dmtx/internal/engine"
@@ -133,6 +134,7 @@ type mysqlNativeWriter struct {
 	mu           sync.Mutex
 	localInfile  mysqlLocalInfileState
 	warn         func(string)
+	fallbacks    atomic.Int64
 }
 
 func newMySQLNativeWriter(database *sql.DB) *mysqlNativeWriter {
@@ -235,6 +237,8 @@ func (writer *mysqlNativeWriter) WriteBatch(
 		writeStatement,
 	)
 }
+
+func (writer *mysqlNativeWriter) DrainFallbackEvents() int { return int(writer.fallbacks.Swap(0)) }
 
 // WriteStage4NetworkBatch writes one replayable network page. It deliberately
 // bypasses LOAD DATA even for a newly-created target: only the strict,

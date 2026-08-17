@@ -672,6 +672,7 @@ func migrateWithStage4IncrementalAdapters(
 	); err != nil {
 		return result, err
 	}
+	observeMigrationPhase(observer, "validation")
 	if err := validateStage4AdapterIncrementalRun(
 		ctx,
 		cfg,
@@ -1279,6 +1280,7 @@ func transferStage4AdapterIncrementalTable(
 	read IncrementalReadPlan,
 ) (stage4AdapterIncrementalProgress, error) {
 	adapterPlan := prepared.plans[table.planIndex]
+	observeMigrationPhase(observer, "target_preparation")
 	if _, err := protectAdapterTargetMutationOnce(
 		ctx,
 		observer,
@@ -1304,6 +1306,7 @@ func transferStage4AdapterIncrementalTable(
 	if err != nil {
 		return stage4AdapterIncrementalProgress{}, err
 	}
+	observeMigrationPhase(observer, "transfer")
 	progress, transferErr := streamStage4AdapterIncrementalRows(
 		ctx,
 		observer,
@@ -1325,6 +1328,7 @@ func transferStage4AdapterIncrementalTable(
 			closeErr,
 		)
 	}
+	observeMigrationPhase(observer, "finalization")
 	if _, err := protectAdapterTargetMutationOnce(
 		ctx,
 		observer,

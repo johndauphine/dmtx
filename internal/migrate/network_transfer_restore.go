@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/johndauphine/dmtx/internal/config"
@@ -597,6 +598,9 @@ func (runtime *networkTransferRuntime) writeChunk(
 		); err != nil {
 			return err
 		}
+		writeStarted := time.Now()
+		activeWriters := runtime.writerGate.count()
+		queueDepth := runtime.queueGate.count()
 		receipt, writeErr := runtime.callbacks.WritePage(
 			ctx,
 			request,
@@ -609,6 +613,11 @@ func (runtime *networkTransferRuntime) writeChunk(
 		if bytesErr != nil {
 			return bytesErr
 		}
+		emitNetworkTelemetry(runtime.callbacks.Telemetry, NetworkTelemetry{
+			TableSchema: chunk.state.plan.TableSchema, TableName: chunk.state.plan.TableName,
+			Operation: NetworkRetryWrite, Duration: time.Since(writeStarted), ActiveWriters: activeWriters,
+			QueueDepth: queueDepth, PayloadBytes: attemptBytes,
+		})
 		if receiptErr := validateNetworkWriteReceipt(
 			receipt,
 			offset,
@@ -664,6 +673,12 @@ func (runtime *networkTransferRuntime) writeChunk(
 				Attempt:    attempt,
 				Operation:  NetworkRetryWrite,
 				Fact:       fact,
+			})
+			emitNetworkTelemetry(runtime.callbacks.Telemetry, NetworkTelemetry{
+				TableSchema: chunk.state.plan.TableSchema,
+				TableName:   chunk.state.plan.TableName,
+				Operation:   NetworkRetryWrite,
+				RetryClass:  string(fact.Class),
 			})
 		}
 		acknowledged := receipt.AcknowledgedRows()

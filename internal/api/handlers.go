@@ -34,6 +34,12 @@ func (server *Server) execute(writer http.ResponseWriter, request *http.Request)
 	// migration, because the job's context is not this request's.
 	running, err := server.start(decoded)
 	if err != nil {
+		if errors.Is(err, errMigrationActive) {
+			writeJSON(writer, http.StatusConflict, map[string]string{
+				"error": "a migration is already running",
+			})
+			return
+		}
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{
 			"error": "could not start the command",
 		})
@@ -63,7 +69,7 @@ func (server *Server) decodeRequest(
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&decoded); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
-			"error": "malformed request: " + err.Error(),
+			"error": "malformed request",
 		})
 		return app.Request{}, false
 	}
@@ -82,10 +88,64 @@ func (server *Server) decodeRequest(
 		})
 		return app.Request{}, false
 	}
+	registered, ok := contract.Resolve(decoded.Command)
+	if !ok || registered.WebUI != contract.Supported {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": "command is not available from the WebUI",
+		})
+		return app.Request{}, false
+	}
+	// Browser-local commands have no app execution path.  They remain in the
+	// registry for discovery, but a direct jobs request must not manufacture a
+	// synthetic result for them.
+	switch registered.Name {
+	case "setup", "session", "logs", "about", "help", "clear", "quit":
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": "command is handled by the browser console",
+		})
+		return app.Request{}, false
+	}
+	decoded.Command = registered.Name
+	if !validDirectActions(decoded) {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": "request contains an unsupported action",
+		})
+		return app.Request{}, false
+	}
+	if err := app.ValidateOperatorText(decoded.AIRequest); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": "request contains unsafe operator text",
+		})
+		return app.Request{}, false
+	}
+	if err := app.ValidateOperatorText(decoded.AbandonReason); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": "request contains unsafe operator text",
+		})
+		return app.Request{}, false
+	}
 	// Console defaults fill in what the request did not say, and only here.
 	// The command line resolves its own arguments and never consults these, so
 	// a destructive command typed in a terminal always names what it acts on.
 	return server.applyDefaults(decoded), true
+}
+
+// validDirectActions keeps JSON callers on the same finite action vocabulary
+// as argv.  In particular, no arbitrary action string can be retained in an
+// event or reflected by an eventual Outcome.  Profile export is admitted so
+// app can return its deliberate protected-export deferral.
+func validDirectActions(request app.Request) bool {
+	if request.ProfileAction != "" {
+		switch request.ProfileAction {
+		case "save", "list", "delete", "export":
+		default:
+			return false
+		}
+	}
+	if request.AIAction != "" && request.AIAction != "config-review" {
+		return false
+	}
+	return true
 }
 
 // commands reports the command registry, so a front end can build its own

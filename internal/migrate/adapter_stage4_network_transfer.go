@@ -289,17 +289,20 @@ func (execution *stage4AdapterNetworkExecution) callbacks(
 				writeCtx context.Context,
 				request NetworkWriteRequest,
 			) (WriteReceipt, error) {
-				return writeStage4AdapterNetworkPage(
+				receipt, err := writeStage4AdapterNetworkPage(
 					writeCtx,
 					execution.target,
 					execution.ranges,
 					execution.plan.ReplayMode,
 					request,
 				)
+				observeFallbackEvents(observer, execution.target)
+				return receipt, err
 			},
 		),
 		RecordIssued: execution.coordinator.recordIssued,
 		Checkpoint:   execution.coordinator.checkpoint,
+		Telemetry:    networkTelemetryCallback(observer),
 	}
 }
 

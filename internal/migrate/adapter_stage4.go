@@ -20,6 +20,7 @@ func migrateWithStage4Adapters(
 	mode string,
 	run Stage4RunContext,
 ) (Result, error) {
+	observeMigrationPhase(observer, "preflight")
 	if _, err := requireStage4TableSetObserver(observer); err != nil {
 		return Result{}, err
 	}
@@ -31,6 +32,7 @@ func migrateWithStage4Adapters(
 	); err != nil {
 		return Result{}, err
 	}
+	observeMigrationPhase(observer, "schema_extraction")
 	prepared, err := prepareStage4AdapterRun(
 		ctx,
 		cfg,
@@ -270,6 +272,7 @@ func migrateWithStage4Adapters(
 	}
 
 	networkTransferStarted := false
+	observeMigrationPhase(observer, "target_preparation")
 	if _, err := protectAdapterTargetMutationOnce(
 		ctx,
 		observer,
@@ -305,6 +308,7 @@ func migrateWithStage4Adapters(
 				)
 			}
 		}
+		observeMigrationPhase(observer, "transfer")
 		networkTransferStarted = true
 		copiedRows, err = runStage4AdapterNetworkTransfer(
 			ctx,
@@ -356,6 +360,7 @@ func migrateWithStage4Adapters(
 		}
 	}
 
+	observeMigrationPhase(observer, "finalization")
 	if _, err := protectAdapterTargetMutationOnce(
 		ctx,
 		observer,
@@ -377,6 +382,7 @@ func migrateWithStage4Adapters(
 		}
 		return Result{}, err
 	}
+	observeMigrationPhase(observer, "validation")
 	if err := validateStage4AdapterRun(
 		ctx,
 		cfg,

@@ -86,7 +86,7 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 		), false
 	}
 	if len(args) == 0 {
-		out.out("DMTX terminal UI is planned; use --help for automation commands.")
+		out.out("No command supplied. Start the authenticated operator console with `dmtx serve`, or use `dmtx --help` for CLI commands.")
 		return Request{}, out.done(Success), false
 	}
 	switch args[0] {
@@ -188,13 +188,13 @@ func parseRequest(args []string) (Request, Outcome, bool) {
 	case "profile":
 		request, err := parseProfileArguments(args[1:])
 		if err != nil {
-			return refuseArguments(out, err, "usage: dmtx profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT]")
+			return refuseArguments(out, err, "usage: dmtx profile save NAME [CONFIG] | list | delete NAME")
 		}
 		return request, Outcome{}, true
 	case "ai":
 		request, err := parseAIArguments(args[1:])
 		if err != nil {
-			return refuseArguments(out, err, "usage: dmtx ai (config-review | runbook) [CONFIG | @CONFIG | --profile NAME] [--timeout DURATION] [--request TEXT]")
+			return refuseArguments(out, err, "usage: dmtx ai config-review [CONFIG | @CONFIG | --profile NAME] [--timeout DURATION] [--request TEXT]")
 		}
 		return request, Outcome{}, true
 	default:
@@ -257,12 +257,18 @@ func classifyUnhandled(out *outcomeBuilder, command string) Outcome {
 			}
 			return out.failWith(ConfigurationError, refusal)
 		}
-		out.out(command + " is planned in this stage.")
-		return out.done(Success)
+		// setup is deliberately a browser-guided exchange, not an app command.
+		// Keeping that boundary explicit avoids advertising a command that the
+		// CLI cannot execute while still directing an operator to its supported
+		// surface.
+		if registered.Name == "setup" {
+			return out.failWith(ConfigurationError, "guided setup is available in the WebUI; start it with dmtx serve")
+		}
+		return out.failWith(ConfigurationError, "this command is available only from its supported interactive surface")
 	}
 	return out.failWith(
 		ConfigurationError,
-		fmt.Sprintf("unknown command %q; use --help", command),
+		"unknown command; use --help",
 	)
 }
 
@@ -427,6 +433,16 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 	}
 	started := time.Now().UTC()
 	runID := started.Format("20060102T150405.000000000Z")
+	operatorTerminal := operatorSummary(runID, "run", cfg, started)
+	operatorTerminal.Outcome, operatorTerminal.Resumable = "failed", true
+	operator := startOperatorSink(cfg, operatorTerminal)
+	var result migrate.Result
+	defer func() {
+		reportRuntimeTuningMetrics(operator, result)
+		operatorTerminal.Rows, operatorTerminal.Tables = int64(result.Rows), int64(result.Tables)
+		operatorTerminal.EndedAt = time.Now().UTC()
+		operator.Finish(operatorTerminal)
+	}()
 	leaseStore, lease, err := acquireTargetLease(cfg.Target, runID)
 	if err != nil {
 		return out.failWith(StateError, "acquire target lease: "+err.Error())
@@ -493,8 +509,9 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 		spoolDirectory: spoolDirectory,
 		configPath:     auditPath,
 		progress:       progress,
+		operator:       operator,
 	}
-	result, err := migrate.Execute(migrationContext, cfg, observer)
+	result, err = migrate.Execute(migrationContext, cfg, observer)
 	if heartbeatErr := heartbeat.Stop(); heartbeatErr != nil {
 		err = fmt.Errorf("%w: renew target lease: %v", state.ErrState, heartbeatErr)
 	}
@@ -505,6 +522,9 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 	}
 	if err != nil {
 		disposition := migrationAttemptDisposition(result, err, cfg.Migration)
+		operatorTerminal.Outcome = string(disposition.outcome)
+		operatorTerminal.Resumable = disposition.resumable
+		operatorTerminal.ErrorClass = string(migrate.ClassifyTransferError(err))
 		endedAt := time.Now().UTC()
 		if stateErr := persistAttemptDisposition(
 			store, runID, disposition, err.Error(), endedAt,
@@ -574,6 +594,7 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 	if err := out.setPayload(PayloadResult, result); err != nil {
 		return out.failWith(FileError, "write result: "+err.Error())
 	}
+	operatorTerminal.Outcome, operatorTerminal.Resumable = "success", false
 	return out.done(Success)
 }
 
@@ -876,16 +897,16 @@ func helpLines() []string {
 		"  /diagnose [CONFIG | --config CONFIG | --profile NAME] [--state PATH] [--run ID]",
 		"  /config [CONFIG | --config CONFIG | --profile NAME]",
 		"  /analyze [CONFIG | --config CONFIG | --profile NAME]",
-		"  /ai config-review|runbook [CONFIG | --profile NAME] [--timeout DURATION] [--request TEXT]",
+		"  /ai config-review [CONFIG | --profile NAME] [--timeout DURATION] [--request TEXT]",
 		"  /status [CONFIG | --profile NAME] [--state PATH] [-d|--detailed]",
 		"  /history [CONFIG | --profile NAME] [--state PATH] [--run ID]",
-		"  /profile save NAME [CONFIG] | list | delete NAME | export NAME [OUTPUT]",
+		"  /profile save NAME [CONFIG] | list | delete NAME",
 		"  /init [--config CONFIG] [--force] | /init-secrets [--force|-f] [--with-ai]",
 		"  /setup [postgres] [CONFIG | @CONFIG | --config CONFIG | --profile NAME]",
 		"  /session [KEY VALUE] | /session clear [KEY]    (config, profile, state-file)",
 		"  /logs | /about | /clear | /quit|/exit",
 		"",
 		"Unavailable because DMTX has no equivalent engine capability:",
-		"  /wizard; /cache; /verbosity; /explore; !shell; DMT-only AI operation flags",
+		"  /wizard; /cache; /verbosity; /explore; AI runbook/evals/archives; !shell",
 	}
 }

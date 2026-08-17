@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -22,6 +23,10 @@ func (server *Server) startJob(writer http.ResponseWriter, request *http.Request
 	}
 	running, err := server.start(decoded)
 	if err != nil {
+		if errors.Is(err, errMigrationActive) {
+			writeJSON(writer, http.StatusConflict, map[string]string{"error": "a migration is already running"})
+			return
+		}
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{
 			"error": "could not start the command",
 		})
@@ -96,7 +101,7 @@ func (server *Server) jobEvents(writer http.ResponseWriter, request *http.Reques
 	}
 
 	writer.Header().Set("Content-Type", "text/event-stream")
-	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("Cache-Control", "no-cache, no-store")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.WriteHeader(http.StatusOK)
 	flusher.Flush()

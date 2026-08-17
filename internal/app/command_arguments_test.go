@@ -154,6 +154,11 @@ func TestHelpAndUsageAdvertiseAcceptedDMTForms(t *testing.T) {
 			t.Errorf("help missing %q", expected)
 		}
 	}
+	for _, deferred := range []string{"profile export", "profile import"} {
+		if strings.Contains(help, deferred) {
+			t.Errorf("help advertised deferred action %q", deferred)
+		}
+	}
 
 	for _, test := range []struct {
 		args []string
