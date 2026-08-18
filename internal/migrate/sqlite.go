@@ -100,7 +100,7 @@ func observeFallbackEvents(observer TableObserver, source any) {
 		return
 	}
 	defer func() { _ = recover() }()
-	for range count {
+	for index := 0; index < count; index++ {
 		reporter.ObserveMigrationFallback("mysql_local_infile_strict_insert")
 	}
 }

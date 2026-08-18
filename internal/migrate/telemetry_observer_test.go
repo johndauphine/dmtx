@@ -42,6 +42,39 @@ func TestMySQLFallbackDrainsExactlyOnce(t *testing.T) {
 	}
 }
 
+type fallbackEventSource struct{ count int }
+
+func (source *fallbackEventSource) DrainFallbackEvents() int {
+	count := source.count
+	source.count = 0
+	return count
+}
+
+type fallbackTelemetryObserver struct{ events []string }
+
+func (*fallbackTelemetryObserver) BeforeTable(context.Context, string) error     { return nil }
+func (*fallbackTelemetryObserver) AfterTable(context.Context, string, int) error { return nil }
+func (observer *fallbackTelemetryObserver) ObserveMigrationFallback(event string) {
+	observer.events = append(observer.events, event)
+}
+
+func TestObserveFallbackEventsReportsEveryDrainedEvent(t *testing.T) {
+	source := &fallbackEventSource{count: 3}
+	observer := &fallbackTelemetryObserver{}
+	observeFallbackEvents(observer, source)
+	if len(observer.events) != 3 {
+		t.Fatalf("fallback events=%d, want 3", len(observer.events))
+	}
+	for _, event := range observer.events {
+		if event != "mysql_local_infile_strict_insert" {
+			t.Fatalf("fallback event=%q", event)
+		}
+	}
+	if source.count != 0 {
+		t.Fatalf("fallback source count=%d after drain", source.count)
+	}
+}
+
 type phaseTelemetryObserver struct{ phases map[string]int }
 
 func (o *phaseTelemetryObserver) BeforeTable(context.Context, string) error     { return nil }

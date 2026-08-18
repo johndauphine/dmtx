@@ -86,6 +86,18 @@ func TestStartedEventUsesOnlySafeRequestProjection(t *testing.T) {
 	}
 }
 
+func TestStartedProjectionKeepsEveryAdmittedProfileAction(t *testing.T) {
+	for _, action := range []string{"save", "list", "delete", "export"} {
+		request := app.Request{Command: "profile", ProfileAction: action}
+		if !validDirectActions(request) {
+			t.Fatalf("profile action %q was not admitted", action)
+		}
+		if got := publicRequestFrom(request).ProfileAction; got != action {
+			t.Fatalf("profile action projection=%q, want %q", got, action)
+		}
+	}
+}
+
 func TestCookieUnsafeCrossPortOriginNeverInvokesHandler(t *testing.T) {
 	auth := &authenticator{session: "good", sessionIssued: time.Now(), host: "127.0.0.1:8484", failures: map[string]authFailure{}}
 	called := false

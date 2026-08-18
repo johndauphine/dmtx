@@ -373,7 +373,7 @@ func publicRequestFrom(request app.Request) publicRequest {
 	}
 	action := ""
 	switch request.ProfileAction {
-	case "save", "list", "delete":
+	case "save", "list", "delete", "export":
 		action = request.ProfileAction
 	}
 	return publicRequest{Command: publicCommand(request.Command), ConfigOrigin: configOrigin, StateOrigin: stateOrigin, ProfileAction: action, AIConfigReview: request.AIAction == "config-review", DryRun: request.DryRun, Abandon: request.Abandon}
