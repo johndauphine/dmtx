@@ -99,9 +99,9 @@ completion or weaken Stage 5 parity, redaction, or release checks.
 
 - [x] Run focused application, API, console, and security tests, including
   client-loss, cancellation, reconnect, completion-containment, and redaction.
-- [ ] Run CI-required offline, race, static-analysis, and formatting checks.
-- [ ] Run the armed Stage 4 live gate unchanged.
-- [ ] Publish docs/STAGE5_CLOSEOUT_HANDOFF.md with the accepted command matrix,
+- [x] Run CI-required offline, race, static-analysis, and formatting checks.
+- [x] Run the armed Stage 4 live gate unchanged.
+- [x] Publish docs/STAGE5_CLOSEOUT_HANDOFF.md with the accepted command matrix,
   evidence, deliberate omissions, residual risks, and the exact Stage 6
   boundary.
 

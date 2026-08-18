@@ -2,16 +2,17 @@
 
 ## Status
 
-Stage 5 is an acceptance candidate based on the fresh remote baseline
+Stage 5 is accepted. It was implemented from the fresh remote baseline
 `eea32e14c641c4465fa49d2f866cc95cde46ae90` on
-`codex/webui-command-palette-metadata`. Final acceptance requires the GitHub
-offline race/static job and the unchanged armed Stage 4 live job to pass on the
-published commit. The final commit SHA and workflow links are recorded below
-after publication.
+`codex/webui-command-palette-metadata` and independently audited with no
+remaining P0/P1 finding. GitHub verified implementation head
+`90997a1a2241e2002d895a6c27b2fe54e59d16dd` through the full offline
+race/static/build job and the unchanged armed Stage 4 live job.
 
-- Final commit: pending
-- GitHub verification: pending
-- Armed Stage 4 live gate: pending
+- Review: [PR #44](https://github.com/johndauphine/dmtx/pull/44)
+- Verification: [Verify run 32107694568](https://github.com/johndauphine/dmtx/actions/runs/32107694568)
+- Offline/race/static/build job: [success](https://github.com/johndauphine/dmtx/actions/runs/32107694568/job/95620376352)
+- Armed Stage 4 live job: [success](https://github.com/johndauphine/dmtx/actions/runs/32107694568/job/95620376374)
 
 ## Accepted scope and command contract
 
@@ -93,9 +94,17 @@ the first migration is real SQLite work through the application seam.
 
 ## GitHub and live evidence
 
-Pending publication. Record the pull request or workflow URL, the `test` job,
-and the `Armed live gate` job here. The live job must retain
-`DMTX_STAGE4_LIVE_REQUIRED=1`; a normal offline skip is not evidence.
+GitHub Verify run 32107694568 completed successfully on implementation head
+`90997a1a2241e2002d895a6c27b2fe54e59d16dd`:
+
+- `test` passed offline tests, vet, golangci-lint, the full race-detector suite,
+  and Linux/Windows builds;
+- `Armed live gate` generated fixture TLS material, started and health-checked
+  all five database fixtures, provisioned databases and grants, and passed the
+  unchanged `DMTX_STAGE4_LIVE_REQUIRED=1` test suite; and
+- fixture cleanup passed. The live race step was skipped at pull-request scope
+  by the repository's documented policy and remains scheduled/workflow-dispatch
+  coverage; the full offline race step passed on this pull request.
 
 ## Deliberate omissions and residual risks
 
