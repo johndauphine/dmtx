@@ -323,6 +323,7 @@ const context = {
     querySelector(selector) { return selector === "#transcript" ? transcript : element(); },
     createElement() { return element(); }
   },
+  navigator: {},
   localStorage: { removeItem() {}, getItem() { return null; }, setItem() {} },
   window: { close() {}, setTimeout() {} }
 };
