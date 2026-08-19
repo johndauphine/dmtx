@@ -107,6 +107,13 @@ func hashWithSQLiteIdentityModes(
 	value.Source = source
 	value.Target = target
 	sanitized := Sanitize(value)
+	// Advisory and delivery-sink settings cannot alter the data plane. They are
+	// deliberately retained in profile YAML, but excluding them here keeps a
+	// provider/model or telemetry destination change from changing migration
+	// identity or invalidating resumable work.
+	sanitized.AI = nil
+	sanitized.Observability = ObservabilityConfig{}
+	sanitized.Slack = SlackConfig{}
 	projection := struct {
 		Version                  int      `json:"version"`
 		Config                   Config   `json:"config"`

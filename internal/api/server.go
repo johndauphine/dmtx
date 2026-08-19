@@ -129,7 +129,6 @@ func New(options Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	auth := &authenticator{launch: launch, session: session}
 
 	// Explicitly 127.0.0.1 rather than localhost: the name can resolve to an
 	// interface that is not loopback, and this listener must never be one.
@@ -143,6 +142,13 @@ func New(options Options) (*Server, error) {
 		return nil, errors.New(
 			"refusing to serve: listener is not bound to loopback",
 		)
+	}
+	auth := &authenticator{
+		launch:        launch,
+		session:       session,
+		sessionIssued: time.Now(),
+		host:          fmt.Sprintf("127.0.0.1:%d", address.Port),
+		failures:      make(map[string]authFailure),
 	}
 
 	handoffSecret, err := newToken()
@@ -296,6 +302,12 @@ func (server *Server) routeMux() *http.ServeMux {
 		http.HandlerFunc(server.cancelJob),
 	))
 	mux.Handle("GET /static/", server.auth.require(
+		http.HandlerFunc(server.consoleAsset),
+	))
+	mux.Handle("GET /manifest.webmanifest", server.auth.require(
+		http.HandlerFunc(server.consoleAsset),
+	))
+	mux.Handle("GET /sw.js", server.auth.require(
 		http.HandlerFunc(server.consoleAsset),
 	))
 	mux.Handle("GET /", server.auth.require(

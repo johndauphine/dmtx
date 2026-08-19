@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
 )
@@ -164,6 +165,42 @@ type NetworkTransferCallbacks struct {
 	WritePage    func(context.Context, NetworkWriteRequest) (WriteReceipt, error)
 	RecordIssued func(context.Context, NetworkIssuedChunk) error
 	Checkpoint   func(context.Context, NetworkRangeCheckpoint) error
+	// Telemetry is best-effort operator evidence only. It has no error return
+	// and the core contains panics so a sink cannot influence transfer state.
+	Telemetry func(NetworkTelemetry)
+}
+
+// NetworkTelemetry is bounded and contains no rows, frontiers, SQL, driver
+// message, or credentials. Values are observed at the target-write boundary.
+type NetworkTelemetry struct {
+	TableSchema   string
+	TableName     string
+	Operation     NetworkRetryOperation
+	Duration      time.Duration
+	ActiveWriters int
+	QueueDepth    int
+	RetryClass    string
+	PayloadBytes  int64
+}
+
+// NetworkTelemetryObserver is optional so existing observers remain source
+// compatible. Implementations must be best-effort; the caller recovers panics.
+type NetworkTelemetryObserver interface{ ObserveNetworkTelemetry(NetworkTelemetry) }
+
+func networkTelemetryCallback(observer TableObserver) func(NetworkTelemetry) {
+	telemetry, ok := observer.(NetworkTelemetryObserver)
+	if !ok || isNilInterface(telemetry) {
+		return nil
+	}
+	return func(fact NetworkTelemetry) { defer func() { _ = recover() }(); telemetry.ObserveNetworkTelemetry(fact) }
+}
+
+func emitNetworkTelemetry(callback func(NetworkTelemetry), fact NetworkTelemetry) {
+	if callback == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	callback(fact)
 }
 
 // RuntimeTuningDecisionSink durably records one controller decision before the

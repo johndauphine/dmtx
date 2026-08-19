@@ -43,9 +43,9 @@ type Request struct {
 	// concern: the same status request must return the same facts everywhere.
 	Detailed bool `json:"detailed,omitempty"`
 
-	// OutputPath is used by an explicit profile export. The profile store stays
-	// encrypted at rest; export is the operator's deliberate request to write a
-	// protected plaintext configuration.
+	// OutputPath remains in the request wire shape so an explicit legacy export
+	// request can be parsed and refused consistently. Stage 5 never writes it:
+	// portable export/import is deferred until both directions are protected.
 	OutputPath string `json:"output_path,omitempty"`
 
 	// Latest distinguishes status from history, which share an implementation.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/johndauphine/dmtx/internal/app"
+	"github.com/johndauphine/dmtx/internal/contract"
 )
 
 // jobRetention is how long a finished job stays readable.
@@ -45,6 +46,7 @@ const (
 const maxRetainedEvents = 2048
 
 var errNoSuchJob = errors.New("no such job")
+var errMigrationActive = errors.New("a migration is already running")
 
 // jobEvent is one entry in a job's stream.
 //
@@ -252,9 +254,10 @@ func (running *job) result() (app.Outcome, bool) {
 
 // jobs holds every job this server has started.
 type jobs struct {
-	mutex    sync.Mutex
-	byID     map[string]*job
-	activity *activity
+	mutex           sync.Mutex
+	byID            map[string]*job
+	activity        *activity
+	migrationActive bool
 
 	// execute is the seam between the job machinery and the command layer.
 	// Tests replace it to drive a command they control - one that blocks,
@@ -293,14 +296,23 @@ func (registry *jobs) start(request app.Request) (*job, error) {
 	}
 
 	registry.mutex.Lock()
+	if (request.Command == "run" || request.Command == "resume") && registry.migrationActive {
+		registry.mutex.Unlock()
+		cancel()
+		return nil, errMigrationActive
+	}
+	if request.Command == "run" || request.Command == "resume" {
+		registry.migrationActive = true
+	}
 	registry.forgetFinished()
 	registry.byID[id] = running
 	registry.mutex.Unlock()
 
-	started, err := json.Marshal(map[string]string{
-		"id":      id,
-		"command": request.Command,
-	})
+	started, err := json.Marshal(struct {
+		ID      string        `json:"id"`
+		Command string        `json:"command"`
+		Request publicRequest `json:"request"`
+	}{ID: id, Command: publicCommand(request.Command), Request: publicRequestFrom(request)})
 	if err != nil {
 		cancel()
 		return nil, err
@@ -315,9 +327,63 @@ func (registry *jobs) start(request app.Request) (*job, error) {
 	go func() {
 		defer registry.activity.end()
 		defer cancel()
-		running.complete(registry.execute(ctx, request, running.reportProgress))
+		registry.complete(running, registry.execute(ctx, request, running.reportProgress), request.Command == "run" || request.Command == "resume")
 	}()
 	return running, nil
+}
+
+// complete publishes a migration's terminal result and releases its exclusive
+// slot as one registry transition. Without the shared lock, a caller awakened
+// by job.done can briefly receive "a migration is already running" even though
+// the previous migration is observably finished.
+func (registry *jobs) complete(running *job, outcome app.Outcome, releasesMigration bool) {
+	if !releasesMigration {
+		running.complete(outcome)
+		return
+	}
+	registry.mutex.Lock()
+	running.complete(outcome)
+	registry.migrationActive = false
+	registry.mutex.Unlock()
+}
+
+// publicRequest is the bounded reconnect record retained in a started frame.
+// It never includes paths, profile names, run ids, arbitrary actions, advisory
+// prose, or abandonment reasons; those remain server-side application input.
+type publicRequest struct {
+	Command        string `json:"command"`
+	ConfigOrigin   string `json:"config_origin,omitempty"`
+	StateOrigin    string `json:"state_origin,omitempty"`
+	ProfileAction  string `json:"profile_action,omitempty"`
+	AIConfigReview bool   `json:"ai_config_review,omitempty"`
+	DryRun         bool   `json:"dry_run,omitempty"`
+	Abandon        bool   `json:"abandon,omitempty"`
+}
+
+func publicRequestFrom(request app.Request) publicRequest {
+	configOrigin := ""
+	if request.ProfileName != "" {
+		configOrigin = "profile"
+	} else if request.ConfigPath != "" {
+		configOrigin = "file"
+	}
+	stateOrigin := ""
+	if request.StatePath != "" {
+		stateOrigin = "file"
+	}
+	action := ""
+	switch request.ProfileAction {
+	case "save", "list", "delete", "export":
+		action = request.ProfileAction
+	}
+	return publicRequest{Command: publicCommand(request.Command), ConfigOrigin: configOrigin, StateOrigin: stateOrigin, ProfileAction: action, AIConfigReview: request.AIAction == "config-review", DryRun: request.DryRun, Abandon: request.Abandon}
+}
+
+func publicCommand(command string) string {
+	if registered, ok := contract.Resolve(command); ok {
+		return registered.Name
+	}
+	return "unrecognized"
 }
 
 // find looks a job up by id.

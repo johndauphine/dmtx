@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/schema"
@@ -30,6 +31,111 @@ const sqliteInsertOnlyReplayMode = "sqlite_insert_only_replay"
 type TableObserver interface {
 	BeforeTable(context.Context, string) error
 	AfterTable(context.Context, string, int) error
+}
+
+// TargetWriteTelemetryObserver is a best-effort, non-blocking observer for
+// real target write attempts. It is deliberately separate from the durable
+// TableObserver hooks, whose errors are part of migration correctness.
+type TargetWriteTelemetryObserver interface{ ObserveTargetWriteTelemetry(TargetWriteTelemetry) }
+
+type TargetWriteTelemetry struct {
+	Table         string
+	Duration      time.Duration
+	ActiveWriters int
+	// QueueDepth is -1 when this route has no truthful live queue observation.
+	QueueDepth int
+}
+
+// WriterQueueTelemetryObserver receives the live buffered queue size from the
+// legacy SQLite pipeline. It is advisory and never participates in backpressure.
+type WriterQueueTelemetryObserver interface{ ObserveWriterQueueDepth(int) }
+
+type PayloadBytesTelemetryObserver interface{ ObservePayloadBytes(string, int64) }
+
+type MigrationFallbackObserver interface{ ObserveMigrationFallback(string) }
+type FallbackEventDrainer interface{ DrainFallbackEvents() int }
+type MigrationRetryObserver interface{ ObserveMigrationRetry(string) }
+
+func observeTargetWriteTelemetry(observer TableObserver, fact TargetWriteTelemetry) {
+	telemetry, ok := observer.(TargetWriteTelemetryObserver)
+	if !ok || isNilInterface(telemetry) {
+		return
+	}
+	defer func() { _ = recover() }()
+	telemetry.ObserveTargetWriteTelemetry(fact)
+}
+
+func observeWriterQueueDepth(observer TableObserver, depth int) {
+	reporter, ok := observer.(WriterQueueTelemetryObserver)
+	if !ok || isNilInterface(reporter) {
+		return
+	}
+	defer func() { _ = recover() }()
+	reporter.ObserveWriterQueueDepth(depth)
+}
+
+func observePayloadBytes(observer TableObserver, table string, bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	reporter, ok := observer.(PayloadBytesTelemetryObserver)
+	if !ok || isNilInterface(reporter) {
+		return
+	}
+	defer func() { _ = recover() }()
+	reporter.ObservePayloadBytes(table, bytes)
+}
+
+func observeFallbackEvents(observer TableObserver, source any) {
+	drainer, ok := source.(FallbackEventDrainer)
+	if !ok || isNilInterface(drainer) {
+		return
+	}
+	count := drainer.DrainFallbackEvents()
+	if count <= 0 {
+		return
+	}
+	reporter, ok := observer.(MigrationFallbackObserver)
+	if !ok || isNilInterface(reporter) {
+		return
+	}
+	defer func() { _ = recover() }()
+	for index := 0; index < count; index++ {
+		reporter.ObserveMigrationFallback("mysql_local_infile_strict_insert")
+	}
+}
+
+func observeMigrationRetry(observer TableObserver, operation string) {
+	reporter, ok := observer.(MigrationRetryObserver)
+	if !ok || isNilInterface(reporter) {
+		return
+	}
+	defer func() { _ = recover() }()
+	reporter.ObserveMigrationRetry(operation)
+}
+
+// MigrationPhaseObserver receives actual engine phase transitions. It is
+// advisory only and is isolated from the stateful TableObserver contract.
+type MigrationPhaseObserver interface{ ObserveMigrationPhase(string) }
+
+func observeMigrationPhase(observer TableObserver, phase string) {
+	if !stableMigrationPhase(phase) {
+		return
+	}
+	reporter, ok := observer.(MigrationPhaseObserver)
+	if !ok || isNilInterface(reporter) {
+		return
+	}
+	defer func() { _ = recover() }()
+	reporter.ObserveMigrationPhase(phase)
+}
+
+func stableMigrationPhase(phase string) bool {
+	switch phase {
+	case "preflight", "schema_extraction", "target_preparation", "transfer", "finalization", "validation":
+		return true
+	}
+	return false
 }
 
 // TableSetObserver receives the complete deterministic table set before the
@@ -410,11 +516,23 @@ func retrySQLiteWriteAttempts(
 	policy RetryPolicy,
 	operation sqliteWriteAttempt,
 ) (WriteReceipt, error) {
+	return retrySQLiteWriteAttemptsObserved(ctx, policy, nil, operation)
+}
+
+func retrySQLiteWriteAttemptsObserved(
+	ctx context.Context,
+	policy RetryPolicy,
+	observer TableObserver,
+	operation sqliteWriteAttempt,
+) (WriteReceipt, error) {
 	if operation == nil {
 		return WriteReceipt{}, ErrNilRetryOperation
 	}
 	var receipt WriteReceipt
 	err := RetryWithPolicy(ctx, policy, func(ctx context.Context, attempt int) error {
+		if attempt > 0 {
+			observeMigrationRetry(observer, "sqlite_write")
+		}
 		current, attemptErr := operation(ctx, attempt)
 		receipt = current
 		if err := current.Validate(); err != nil {
@@ -517,7 +635,7 @@ func writeSQLiteBatchReceiptWithRangePolicy(
 		Certainty:     CommitNotCommitted,
 		AttemptedRows: attempted,
 	}
-	receipt, err := retrySQLiteWriteAttempts(ctx, policy, func(ctx context.Context, _ int) (WriteReceipt, error) {
+	receipt, err := retrySQLiteWriteAttemptsObserved(ctx, policy, observer, func(ctx context.Context, _ int) (WriteReceipt, error) {
 		current := zero
 		if chunk != nil {
 			if err := notifySQLiteRangeAttempt(ctx, observer, observerMu, *chunk); err != nil {
@@ -525,12 +643,14 @@ func writeSQLiteBatchReceiptWithRangePolicy(
 			}
 		}
 		mutationCalled := false
+		started := time.Now()
 		guardErr := protectSQLiteTargetMutation(ctx, observer, func() error {
 			mutationCalled = true
 			var attemptErr error
 			current, attemptErr = writeSQLiteTransactionAttempt(ctx, target, table, columns, mode, rows)
 			return attemptErr
 		})
+		observeTargetWriteTelemetry(observer, TargetWriteTelemetry{Table: table.Name, Duration: time.Since(started), ActiveWriters: 1, QueueDepth: -1})
 		if guardErr == nil {
 			return current, nil
 		}

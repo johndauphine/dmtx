@@ -259,7 +259,7 @@ func (server *Server) session(writer http.ResponseWriter, request *http.Request)
 	type describedKey struct {
 		Key         string `json:"key"`
 		Description string `json:"description"`
-		Value       string `json:"value,omitempty"`
+		Set         bool   `json:"set"`
 	}
 	set := server.defaults.all()
 	names := make([]string, 0, len(sessionKeys))
@@ -273,7 +273,7 @@ func (server *Server) session(writer http.ResponseWriter, request *http.Request)
 		described = append(described, describedKey{
 			Key:         key,
 			Description: sessionKeys[key],
-			Value:       set[key],
+			Set:         set[key] != "",
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"defaults": described})
@@ -289,7 +289,7 @@ func (server *Server) setSession(writer http.ResponseWriter, request *http.Reque
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&asked); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
-			"error": "malformed request: " + err.Error(),
+			"error": "malformed request",
 		})
 		return
 	}
@@ -324,7 +324,7 @@ func (server *Server) clearSession(writer http.ResponseWriter, request *http.Req
 func (server *Server) refuseSessionKey(writer http.ResponseWriter, key string, err error) {
 	if !errors.Is(err, errUnknownSessionKey) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{
-			"error": "could not record the default: " + err.Error(),
+			"error": "could not record the default",
 		})
 		return
 	}
@@ -334,7 +334,7 @@ func (server *Server) refuseSessionKey(writer http.ResponseWriter, key string, e
 	}
 	sort.Strings(known)
 	writeJSON(writer, http.StatusNotFound, map[string]any{
-		"error": "unknown session key " + key,
+		"error": "unknown session key",
 		"known": known,
 	})
 }

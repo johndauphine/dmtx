@@ -22,6 +22,10 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	// Unit routes are invoked through httptest without the listener's Host.
+	// Production New always installs the exact loopback host guard; integration
+	// tests exercise that path through the real listener.
+	server.auth.host = ""
 	t.Cleanup(func() { _ = server.listener.Close() })
 	return server
 }
@@ -84,6 +88,7 @@ func TestWrongTokenIsRefused(t *testing.T) {
 // bar so it does not linger in history or a shared screenshot.
 func TestLoginExchangesTokenForASessionAndHidesIt(t *testing.T) {
 	server := newTestServer(t)
+	previousSession := server.auth.session
 	request := httptest.NewRequest(
 		http.MethodGet,
 		"/login?token="+server.auth.launch,
@@ -112,6 +117,12 @@ func TestLoginExchangesTokenForASessionAndHidesIt(t *testing.T) {
 	}
 	if session.SameSite != http.SameSiteStrictMode {
 		t.Error("session cookie is not SameSite=Strict, so a cross-site navigation could carry it")
+	}
+	if session.MaxAge <= 0 {
+		t.Error("session cookie has no absolute lifetime")
+	}
+	if session.Value == previousSession || session.Value != server.auth.session {
+		t.Error("successful launch did not rotate the server session")
 	}
 }
 

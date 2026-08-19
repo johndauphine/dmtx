@@ -29,6 +29,9 @@ func TestConsoleServesAuthenticatedExternalAssets(t *testing.T) {
 		{"/", "text/html", "/static/console.js"},
 		{"/static/console.js", "text/javascript", "const apiRoutes"},
 		{"/static/console.css", "text/css", ".console-shell"},
+		{"/static/icon.svg", "image/svg+xml", "<svg"},
+		{"/manifest.webmanifest", "application/manifest+json", "DMTX Console"},
+		{"/sw.js", "text/javascript", "network outage"},
 	} {
 		t.Run(testCase.path, func(t *testing.T) {
 			recorder := consoleRequest(t, server, testCase.path, true)
@@ -53,9 +56,33 @@ func TestConsoleServesAuthenticatedExternalAssets(t *testing.T) {
 		})
 	}
 
-	for _, path := range []string{"/", "/static/console.js", "/static/console.css"} {
+	for _, path := range []string{"/", "/static/console.js", "/static/console.css", "/static/icon.svg", "/manifest.webmanifest", "/sw.js"} {
 		if recorder := consoleRequest(t, server, path, false); recorder.Code != http.StatusUnauthorized {
 			t.Errorf("unauthenticated GET %s = %d, want 401", path, recorder.Code)
+		}
+	}
+}
+
+func TestConsolePWAAndRecallStayBoundedAndSafe(t *testing.T) {
+	script := string(consoleJS)
+	for _, required := range []string{
+		"trustedTypes.createPolicy(\"dmtx-service-worker\"", "createScriptURL", "serviceWorker.register(workerURL)",
+		"maxTranscriptEntries", "textContent",
+		"isRecallSafe", "--request", "--abandon-reason", "init-secrets",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("console script missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "eval("} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("console script contains unsafe renderer %q", forbidden)
+		}
+	}
+	worker := string(consoleWorker)
+	for _, required := range []string{"fetch(event.request)", "response.ok", "cache.put", "caches.match", "url.pathname.startsWith(\"/api/v1/\")"} {
+		if !strings.Contains(worker, required) {
+			t.Errorf("service worker missing %q", required)
 		}
 	}
 }
@@ -296,6 +323,7 @@ const context = {
     querySelector(selector) { return selector === "#transcript" ? transcript : element(); },
     createElement() { return element(); }
   },
+  navigator: {},
   localStorage: { removeItem() {}, getItem() { return null; }, setItem() {} },
   window: { close() {}, setTimeout() {} }
 };

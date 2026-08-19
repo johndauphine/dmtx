@@ -3,6 +3,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -69,12 +71,34 @@ type Migration struct {
 	parsedBaseline *Migration
 }
 type Config struct {
-	Source    Endpoint  `yaml:"source"`
-	Target    Endpoint  `yaml:"target"`
-	Migration Migration `yaml:"migration"`
-	AI        *AIConfig `yaml:"ai,omitempty"`
+	Source        Endpoint            `yaml:"source"`
+	Target        Endpoint            `yaml:"target"`
+	Migration     Migration           `yaml:"migration"`
+	AI            *AIConfig           `yaml:"ai,omitempty"`
+	Observability ObservabilityConfig `yaml:"observability,omitempty" json:"-"`
+	Slack         SlackConfig         `yaml:"slack,omitempty" json:"-"`
 
 	diagnostics []ConfigDiagnostic
+}
+
+// ObservabilityConfig controls optional operator sinks. It deliberately does
+// not participate in data-plane hashes: changing a receiver cannot change a
+// migration or invalidate a durable resume proof.
+type ObservabilityConfig struct {
+	LogFormat       string        `yaml:"log_format,omitempty"`
+	PrometheusBind  string        `yaml:"prometheus_bind,omitempty"`
+	OTLPEndpoint    string        `yaml:"otlp_endpoint,omitempty"`
+	OTLPTimeout     time.Duration `yaml:"otlp_timeout,omitempty"`
+	MaxMetricSeries int           `yaml:"max_metric_series,omitempty"`
+}
+
+// SlackConfig is intentionally small: webhooks are notification sinks, never
+// a source of migration policy. Its secret is excluded from all JSON/hash
+// projections and redacted by Sanitize.
+type SlackConfig struct {
+	WebhookURL    string `yaml:"webhook_url,omitempty" json:"-"`
+	NotifySuccess bool   `yaml:"notify_success,omitempty"`
+	NotifyFailure bool   `yaml:"notify_failure,omitempty"`
 }
 
 // SameEndpoint reports whether source and target resolve to the same physical
@@ -268,6 +292,9 @@ func Parse(data []byte) (Config, error) {
 	if err := validateProductionSemantics(value.Migration); err != nil {
 		return Config{}, err
 	}
+	if err := validateObservability(value.Observability, value.Slack); err != nil {
+		return Config{}, err
+	}
 	if err := validatePatterns("include_tables", value.Migration.IncludeTables); err != nil {
 		return Config{}, err
 	}
@@ -276,6 +303,38 @@ func Parse(data []byte) (Config, error) {
 	}
 	value.Migration.captureParsedBaseline()
 	return value, nil
+}
+
+func validateObservability(observability ObservabilityConfig, slack SlackConfig) error {
+	switch observability.LogFormat {
+	case "", "text", "json":
+	default:
+		return fmt.Errorf("observability.log_format must be text or json")
+	}
+	if observability.OTLPTimeout < 0 || observability.OTLPTimeout > 30*time.Second {
+		return fmt.Errorf("observability.otlp_timeout must be between 0s and 30s")
+	}
+	if observability.MaxMetricSeries < 0 || observability.MaxMetricSeries > 10000 {
+		return fmt.Errorf("observability.max_metric_series must be between 0 and 10000")
+	}
+	if bind := strings.TrimSpace(observability.PrometheusBind); bind != "" {
+		if _, _, err := net.SplitHostPort(bind); err != nil {
+			return fmt.Errorf("observability.prometheus_bind must be host:port")
+		}
+	}
+	if endpoint := strings.TrimSpace(observability.OTLPEndpoint); endpoint != "" {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+			return fmt.Errorf("observability.otlp_endpoint must be an http(s) URL without credentials")
+		}
+	}
+	if webhook := strings.TrimSpace(slack.WebhookURL); webhook != "" {
+		parsed, err := url.Parse(webhook)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+			return fmt.Errorf("slack.webhook_url must be an http(s) URL")
+		}
+	}
+	return nil
 }
 
 const (
@@ -528,6 +587,7 @@ func ExpandSecret(value string) (string, error) {
 func Sanitize(value Config) Config {
 	value.Source.Password = redact(value.Source.Password)
 	value.Target.Password = redact(value.Target.Password)
+	value.Slack.WebhookURL = redact(value.Slack.WebhookURL)
 	return value
 }
 func redact(value string) string {

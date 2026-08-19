@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -39,6 +40,22 @@ type endpointAIFacts struct {
 	Schema string `json:"schema,omitempty"`
 }
 
+var credentialShapedOperatorText = regexp.MustCompile(`(?i)(?:\b(?:credential|password|passwd|pwd|secret|token|api[-_ ]?key|private[-_ ]?key)\b\s*(?:=|:)\s*\S+|\bbearer\s+(?:[a-z0-9_-]{16,}|[a-z0-9_-]+\.[a-z0-9._-]+(?:\.[a-z0-9._-]+)?)|\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@)`)
+
+var errCredentialShapedOperatorText = errors.New("operator text contains credential-shaped content")
+
+// ValidateOperatorText keeps free-form operator input from becoming a secret
+// transport through either the advisory provider or durable abandonment state.
+func ValidateOperatorText(value string) error {
+	if len(strings.TrimSpace(value)) > 4096 {
+		return errors.New("operator text is too large")
+	}
+	if credentialShapedOperatorText.MatchString(value) {
+		return errCredentialShapedOperatorText
+	}
+	return nil
+}
+
 func executeAI(ctx context.Context, request Request) Outcome {
 	return executeAIWith(ctx, request, func() (secrets.Config, error) {
 		path, err := secrets.Path()
@@ -58,6 +75,9 @@ func executeAIWith(ctx context.Context, request Request, load func() (secrets.Co
 	}
 	if request.AIAction != "config-review" {
 		return out.failWith(ConfigurationError, "usage: dmtx ai config-review (--config migration.yaml | --profile NAME)")
+	}
+	if err := ValidateOperatorText(request.AIRequest); err != nil {
+		return out.failWith(ConfigurationError, "AI advisory request contains credential-shaped text")
 	}
 	data, origin, err := configurationData(request)
 	if err != nil {
@@ -118,12 +138,44 @@ func executeAIWith(ctx context.Context, request Request, load func() (secrets.Co
 		out.out(message)
 		return out.failWith(ConfigurationError, message)
 	}
+	if err := validateAIAdvisory(advisory); err != nil {
+		payload := aiAdvisoryPayload{
+			Status:   "invalid_response",
+			Provider: client.ProviderName(),
+			Model:    client.Model(),
+			Error:    "response_credential_output",
+		}
+		_ = out.setPayload(PayloadAIAdvisory, payload)
+		return out.failWith(ConfigurationError, "AI advisory unavailable: response credential output")
+	}
 	payload := aiAdvisoryPayload{Status: "ok", Provider: client.ProviderName(), Model: client.Model(), Advisory: advisory}
 	if err := out.setPayload(PayloadAIAdvisory, payload); err != nil {
 		return out.failWith(FileError, "write AI advisory: "+err.Error())
 	}
 	out.out("AI advisory: " + advisory.Summary)
 	return out.done(Success)
+}
+
+// validateAIAdvisory applies the same secret boundary to provider output as to
+// operator input. Schema validation bounds shape, but a well-formed advisory
+// can still contain a pasted credential in any displayable string.
+func validateAIAdvisory(advisory ai.Advisory) error {
+	if err := ValidateOperatorText(advisory.Summary); err != nil {
+		return err
+	}
+	for _, finding := range advisory.Findings {
+		for _, value := range []string{finding.Category, finding.Title, finding.Summary, finding.Action} {
+			if err := ValidateOperatorText(value); err != nil {
+				return err
+			}
+		}
+	}
+	for _, warning := range advisory.Warnings {
+		if err := ValidateOperatorText(warning); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func CancelledOrConnection(status string) int {
@@ -159,8 +211,8 @@ func buildAIAdvisoryPrompt(origin string, cfg config.Config, request Request) (s
 		return "", err
 	}
 	operatorRequest := strings.TrimSpace(request.AIRequest)
-	if len(operatorRequest) > 4096 {
-		return "", errors.New("operator request is too large")
+	if err := ValidateOperatorText(operatorRequest); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("You provide DMTX advisory guidance only. Deterministic migration facts are authoritative. Never propose executing commands or changing configuration automatically. This is DMTX's display-only advisory schema, not DMT's richer config-review schema: do not emit patch_recommendations, runbook, commands, status, provider, model, or prompt metadata. Return exactly one JSON object, with no prose and no markdown fence, matching {\"summary\":string,\"findings\":[{\"category\":string,\"title\":string,\"summary\":string,\"action\":string}],\"warnings\":[string]}. Use empty arrays when there are no findings or warnings. Do not include credentials, secrets, raw SQL, rows, full logs, or file contents. Configuration origin kind: %s. Facts: %s. Operator request: %s", originKind(origin), encoded, operatorRequest), nil
 }

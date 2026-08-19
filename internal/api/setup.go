@@ -86,7 +86,7 @@ func decodeSetupRequest(writer http.ResponseWriter, request *http.Request, value
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, maxRequestBytes))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "malformed request: " + err.Error()})
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "malformed request"})
 		return false
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {

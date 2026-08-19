@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/johndauphine/dmtx/internal/migrate"
+	"github.com/johndauphine/dmtx/internal/observability"
 	"github.com/johndauphine/dmtx/internal/state"
 )
 
@@ -29,6 +30,7 @@ type tableCheckpointObserver struct {
 	// each hook exists to write, never before: a watcher sees what has durably
 	// happened, not what is about to be attempted.
 	progress *progressReporter
+	operator *observability.Sink
 }
 
 // stage4FencedStateBackend is private proof that the application wrapped the
@@ -318,6 +320,9 @@ func (observer tableCheckpointObserver) AfterTable(_ context.Context, table stri
 		return stateCheckpointError("complete table checkpoint", err)
 	}
 	observer.progress.finished(table, rowsDone)
+	if observer.operator != nil {
+		observer.operator.Progress(table, int64(rowsDone), 0)
+	}
 	return nil
 }
 
@@ -362,6 +367,9 @@ func (observer tableCheckpointObserver) AfterStage4TablePublication(
 		// routes and this one composed routes that already committed the same
 		// advance with their range evidence.
 		observer.progress.finished(table, rowsDone)
+		if observer.operator != nil {
+			observer.operator.Progress(table, int64(rowsDone), 0)
+		}
 		return nil
 	}
 	return stateCheckpointError(

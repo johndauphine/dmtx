@@ -13,6 +13,22 @@ drifting.
 Statements are marked **[decided]** where John has settled them and
 **[proposed]** where they are a recommendation awaiting confirmation.
 
+## Acceptance amendments approved 2026-08-16
+
+The following closeout decisions supersede earlier proposals or broader DMT
+parity language in this note wherever they conflict:
+
+- the TUI is omitted; CLI/WebUI parity and the SSH-forward workflow are final;
+- profile save/list/delete and encrypted origin loading ship, while portable
+  export/import is deferred and plaintext export is refused;
+- AI is limited to optional, display-only `config-review`; runbook, eval, and
+  archive actions are omitted;
+- observability and Slack sinks are configured through YAML only, with no
+  Stage 5 global CLI sink flags; and
+- migration-state history remains queryable, while durable operator log/archive
+  retention is external. Browser input recall is bounded, local UI state and is
+  not the migration-history command.
+
 ## Deployment model
 
 **[decided]** DMTX runs in two places, both first-class:
@@ -27,13 +43,13 @@ Every surface decision below follows from having to serve both.
 **[decided]** There will be no terminal UI. The WebUI must be rich enough that
 nothing is lost by its absence.
 
-**[proposed]** Record this honestly rather than by omission:
+**[decided]** Record this honestly rather than by omission:
 
-- set `TUI: Omitted` for every entry in `internal/contract`, which already
+- `TUI: Omitted` is set for every entry in `internal/contract`, which already
   admits `Supported` / `Planned` / `Omitted` and enforces that none is blank
   via `TestEveryCommandHasFrontendDisposition`;
-- amend §21.1, which currently requires TUI launch and three-way CLI/TUI/WebUI
-  parity, to two-way CLI/WebUI parity.
+- §3, §5, the Stage 5 milestone, and §21.1 are amended from TUI or three-way
+  parity language to CLI/WebUI parity.
 
 ### Why omitting it is defensible
 
@@ -50,7 +66,7 @@ shape and **more** secure than exposing a port would be. DMT's
 `internal/webui/security.go` already treats non-localhost binds conservatively;
 carry that default forward, and make any override loud.
 
-**[proposed]** Documenting the port-forward pattern is a Stage 5 deliverable,
+**[decided]** Documenting the port-forward pattern is a Stage 5 deliverable,
 not an afterthought. It is what makes "nothing is lost" true rather than
 aspirational.
 
@@ -155,9 +171,9 @@ Source material in `~/repos/dmt`:
 means recreating that too. Basing the console on the TUI was the right call for
 its *shape*; it is not the whole obligation.
 
-Auditing DMT's `internal/webui` routes against DMTX found that most of the gap
-is **not front-end work**. Nine capabilities are registered in
-`internal/contract` and unimplemented in `internal/app`:
+The pre-implementation audit of DMT's `internal/webui` routes against DMTX
+found that most of the gap was **not front-end work**. The original disposition
+was:
 
 | DMT web UI route | DMTX |
 | --- | --- |
@@ -174,14 +190,16 @@ is **not front-end work**. Nine capabilities are registered in
 | `/api/session` (get, set, delete defaults) | **absent from the registry** |
 | `/api/health` | absent |
 
-The count is of commands, not rows above it: `init` is registered in DMTX and
-unimplemented, but DMT reaches it through the setup flow rather than a route of
-its own, which is why it has no left-hand entry.
+The count was of commands, not rows above it: `init` was registered in DMTX but
+DMT reached it through the setup flow rather than a route of its own, which is
+why it had no left-hand entry.
 
-**[decided]** All of it is in scope, including the four that carry real design
-weight — session defaults, the setup wizard, profiles, and AI config review.
-Commands are built before the console, so the console arrives able to render a
-whole surface rather than mostly reporting "planned".
+**[decided]** The final Stage 5 dispositions are recorded in
+`STAGE5_COMMAND_MATRIX.md`. Diagnose, analyze, profile save/list/delete,
+display-only AI config review, init-secrets, setup, configuration review, and
+session defaults are delivered. Profile export/import is the approved deferred
+exception and is refused rather than exposed. The table above records the
+pre-implementation audit that established the work; it is not current status.
 
 ### Two commands scoped differently from DMT
 
@@ -281,13 +299,15 @@ exists. An absent key is generated on first seal and written back — and the
 write must preserve the rest of the file, because losing the key makes every
 stored profile unrecoverable. DMT guards this explicitly; carry the guard.
 
-**Export re-encrypts under a passphrase supplied at export time.** The exported
+**[superseded 2026-08-16]** The earlier design said export would re-encrypt under
+a passphrase supplied at export time. The exported
 file is portable to another machine without the master key ever leaving this
 one: the recipient needs only the passphrase. Plaintext export was rejected —
 §21.2 exists to stop credentials being written to an arbitrary path in the
 clear, and "export" is exactly where an operator would expect that to be fine.
 
-**[decided]** The three sub-decisions, settled 2026-08-05:
+The following three sub-decisions, settled 2026-08-05, remain a possible future
+portable-format design but are not Stage 5 scope:
 
 - **Argon2id** derives the export key from the passphrase. It won the Password
   Hashing Competition and is what OWASP recommends; being memory-hard, an
@@ -322,8 +342,8 @@ Three do not fit the `Request`/`Outcome` seam as it stands:
 
 ### Domain commands versus shell commands
 
-**[proposed]** DMT's 24 commands are two different things, and only one is a
-parity obligation:
+**[decided]** DMT's 24 commands are two different things, and only one is a
+domain parity obligation:
 
 - **Domain** — `/run`, `/resume`, `/validate`, `/diagnose`, `/status`,
   `/history`, `/preflight`, `/analyze`, `/ai`, `/profile`, `/cache`, `/setup`,
@@ -333,13 +353,13 @@ parity obligation:
   (`/quit` closes a tab, `/clear` clears a pane) or become UI chrome. Keep them
   as slash commands for muscle memory, but they are not parity obligations.
 
-DMTX's `internal/contract` registers 14 commands. Check that split against
-DMT's 24 before implementing, so no domain-level capability is missing from the
-registry itself.
+DMTX's final domain and browser-shell dispositions are recorded in
+`STAGE5_COMMAND_MATRIX.md` and enforced by the registry and armed browser
+tests. The pre-implementation comparison against DMT's 24 commands is closed.
 
 ## The security decision that has no precedent in the TUI
 
-**[proposed]** `@` completion is the one feature that genuinely changes when it
+**[decided]** `@` completion is the one feature that genuinely changes when it
 moves to a browser, and it is the easiest thing here to implement unsafely.
 
 In the TUI, `@` completes against the local filesystem as the invoking user. In
@@ -376,10 +396,9 @@ directories precisely so that "there is no directory-traversal surface".
 
 ## Parity enforcement
 
-**[proposed]** Carry DMT's mechanism over rather than inventing one: a registry
-plus a surface test per front end, asserting that every registry path a surface
-claims to support is actually discoverable in that surface — in autocomplete and
-in `/help`, not merely routable.
+**[decided]** DMTX carries DMT's mechanism over: a registry plus surface tests
+assert that every supported registry path is discoverable in autocomplete and
+`/help`, not merely routable.
 
 `TestTUICommandSurface` is the model. DMTX needs its WebUI-side equivalent. With
 the TUI omitted, that test is what converts "nothing is lost" from an intention
@@ -387,9 +406,8 @@ into an enforced property.
 
 ## Wails
 
-**[decided]** Under consideration for a native desktop shell.
-
-**[proposed]** Defer it, and do not let it shape the architecture.
+**[decided]** A native desktop shell is deferred and omitted from Stage 5; it
+does not shape the architecture.
 
 - **Wails does not serve remotely.** It is a local desktop binary with an
   embedded webview. It cannot replace an HTTP-served UI, so it is additive, not
@@ -477,7 +495,8 @@ assume they are contiguous.
 
 ## Suggested build order
 
-**[proposed]**
+**[historical]** This was the implementation order; the final evidence is in
+`STAGE5_CLOSEOUT_HANDOFF.md`.
 
 1. Surface-agnostic command layer and JSON API — the parity seam.
 2. Root-confined, authenticated path-completion endpoint.
@@ -505,12 +524,13 @@ assume they are contiguous.
   are tested. The failure mode to design against is a surface that recomputes
   something and quietly disagrees with the engine.
 
-## Open questions
+## Resolved questions
 
-- Does a forwarded-port session still require authentication? **[proposed]** yes.
-- Should the WebUI ever be permitted to bind beyond localhost, and if so, behind
-  what explicit acknowledgement?
-- What is the allowed root for `@` completion — the config file's directory, an
-  explicit setting, or the working directory?
-- Do the 14 registered commands in `internal/contract` cover every domain
-  capability DMT's 24 slash commands expose?
+- A forwarded-port session requires the same authentication as a local browser.
+- Stage 5 has no non-loopback bind option. Remote access uses SSH forwarding;
+  any reverse proxy is an external, separately audited deployment decision.
+- `@` completion is confined to an explicit root when supplied, otherwise the
+  selected config directory and then the working directory. An unusable root
+  disables completion rather than widening access.
+- The final registry/domain comparison is closed by
+  `STAGE5_COMMAND_MATRIX.md`, contract tests, and the armed browser test.

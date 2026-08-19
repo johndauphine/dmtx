@@ -284,6 +284,16 @@ func (adapter *mysqlTargetAdapter) WriteBatch(
 	)
 }
 
+func (adapter *mysqlTargetAdapter) DrainFallbackEvents() int {
+	if adapter == nil {
+		return 0
+	}
+	if drainer, ok := adapter.batchWriter.(interface{ DrainFallbackEvents() int }); ok {
+		return drainer.DrainFallbackEvents()
+	}
+	return 0
+}
+
 // WriteStage4NetworkBatch is the target boundary for a replayable network
 // page. It preserves the ordinary source-value normalization but requires a
 // native writer that can bind its replay-isolation proof to the exact upsert

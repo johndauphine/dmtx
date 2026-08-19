@@ -14,6 +14,15 @@ var consoleJS []byte
 //go:embed static/console.css
 var consoleCSS []byte
 
+//go:embed static/manifest.webmanifest
+var consoleManifest []byte
+
+//go:embed static/icon.svg
+var consoleIcon []byte
+
+//go:embed static/sw.js
+var consoleWorker []byte
+
 const consoleCSP = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; require-trusted-types-for 'script'"
 
 func consoleHeaders(writer http.ResponseWriter) {
@@ -44,6 +53,15 @@ func (server *Server) consoleAsset(writer http.ResponseWriter, request *http.Req
 	case "/static/console.css":
 		writer.Header().Set("Content-Type", "text/css; charset=utf-8")
 		_, _ = writer.Write(consoleCSS)
+	case "/static/icon.svg":
+		writer.Header().Set("Content-Type", "image/svg+xml")
+		_, _ = writer.Write(consoleIcon)
+	case "/manifest.webmanifest":
+		writer.Header().Set("Content-Type", "application/manifest+json")
+		_, _ = writer.Write(consoleManifest)
+	case "/sw.js":
+		writer.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = writer.Write(consoleWorker)
 	default:
 		http.NotFound(writer, request)
 	}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -186,6 +187,40 @@ func TestCancellingAJobStopsTheCommand(t *testing.T) {
 	if outcome.ExitCode == 0 {
 		t.Error("a cancelled command reported success")
 	}
+}
+
+func TestMigrationSlotReleasesWithTerminalPublication(t *testing.T) {
+	server := newTestServer(t)
+	first := newBlockingCommand()
+	server.jobs.execute = first.run
+	running, err := server.jobs.start(app.Request{Command: "run"})
+	if err != nil {
+		t.Fatalf("start first migration: %v", err)
+	}
+	<-first.entered
+	if _, err := server.jobs.start(app.Request{Command: "resume"}); !errors.Is(err, errMigrationActive) {
+		t.Fatalf("concurrent migration error = %v, want %v", err, errMigrationActive)
+	}
+	close(first.release)
+	<-running.done
+
+	second := newBlockingCommand()
+	server.jobs.execute = second.run
+	started := make(chan error, 1)
+	go func() {
+		_, err := server.jobs.start(app.Request{Command: "run"})
+		started <- err
+	}()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("migration after terminal publication: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("migration slot was not released with the terminal result")
+	}
+	<-second.entered
+	close(second.release)
 }
 
 // TestJobEventsStreamUntilTheJobEnds pins the stream's shape and its ending.

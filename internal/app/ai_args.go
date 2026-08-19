@@ -8,9 +8,9 @@ import (
 )
 
 func parseAIArguments(args []string) (Request, error) {
-	if len(args) < 1 || (args[0] != "config-review" && args[0] != "runbook") {
+	if len(args) < 1 || args[0] != "config-review" {
 		return Request{}, fmt.Errorf(
-			"/ai: expected config-review or its runbook alias (see /help)",
+			"/ai: expected config-review (see /help)",
 		)
 	}
 
@@ -57,6 +57,9 @@ func parseAIArguments(args []string) (Request, error) {
 	timeout, err := parseAITimeout(parsed.values["timeout"])
 	if err != nil {
 		return Request{}, fmt.Errorf("/ai %s: %w", args[0], err)
+	}
+	if err := ValidateOperatorText(requestText); err != nil {
+		return Request{}, err
 	}
 	return Request{
 		Command:     "ai",

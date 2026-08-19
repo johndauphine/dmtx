@@ -144,16 +144,16 @@ Defaults MUST be secure:
 
 The executable name MUST be `dmtx`.
 
-With no command, `dmtx` MUST launch an interactive terminal UI. With `--webui`
-and no command, it MUST launch an embedded browser UI. Ordinary subcommands
-MUST use the same application services and orchestrator as both interactive
-front ends.
+With no command, `dmtx` MUST print concise guidance to the CLI and authenticated
+operator console. `dmtx serve` (aliases `webui` and `gui`) MUST launch the
+embedded browser UI. Ordinary subcommands and the browser UI MUST use the same
+application services and orchestrator. A terminal UI is deliberately omitted;
+an operator on a remote host uses the CLI or an SSH-forwarded WebUI, for example
+`ssh -L 8484:localhost:8484 dbhost`.
 
-The terminal UI MUST provide discoverable slash commands, configuration file
-selection, session defaults, live progress, log capture, resume, and setup.
 The browser UI MUST provide an authenticated single-operator console for run,
 resume, cancel, progress streaming, status/history, preflight, dry-run,
-validation, diagnosis, analysis, setup, profiles, cache management, and session
+validation, diagnosis, analysis, setup, profiles, configuration, and session
 settings.
 
 A machine-checked registry or equivalent contract test MUST ensure that every
@@ -174,28 +174,36 @@ The CLI MUST provide these commands and aliases:
 - `status`: show the current or last run, including outcome and resumability;
   support JSON.
 - `history`: list runs or show a selected run.
-- `validate`: run deterministic validation; optionally request AI advisory
-  triage without changing deterministic results.
+- `validate`: run deterministic validation without AI changing or augmenting
+  the result.
 - `diagnose`: build deterministic failure facts for the current or selected
-  run; optionally add AI advisory triage.
+  run.
 - `preflight`, with `health-check` as an alias: test connectivity and readiness.
-- `analyze`: inspect source workload and recommend deterministic configuration;
-  optionally apply recommendations and request an AI explanation.
-- `profile save|list|delete|export`: manage encrypted configuration profiles
-  in the full local state backend.
-- `ai config-review`, with `ai runbook` as an alias: produce advisory config
-  patches and an operator runbook.
-- `ai evals`: run or list fixed developer-facing advisory quality scenarios.
-- `init`: create configuration interactively.
+- `analyze`: report the deterministic effective transfer plan from configuration
+  without source sampling, automatic application, or AI explanation.
+- `profile save|list|delete`: manage encrypted configuration profiles in the
+  local protected profile backend. Portable export/import is deferred and any
+  export request MUST be refused until passphrase-protected export and import
+  ship together.
+- `ai config-review`: optionally produce a bounded, display-only advisory from
+  sanitized configuration facts. Runbook, eval, and archive actions are omitted;
+  no AI result may execute commands or modify configuration.
+- `init`: create a configuration template with overwrite protection.
 - `init-secrets`: create a secure secrets template; AI fields are opt-in.
-- `setup`: guided secrets, config, connection-test, and analysis workflow.
-- `cache clear`: invalidate type-mapping cache entries, optionally only those
-  derived from AI.
+- `setup`: guided SQLite or PostgreSQL config, protected-secret, and bounded
+  connection-test workflow in the authenticated WebUI. The CLI MUST direct the
+  operator to `dmtx serve` rather than pretend the conversation is a one-shot
+  application command.
+
+`cache clear` is deliberately omitted because DMTX has no type-mapping cache to
+clear; lease coordination state is durable and MUST NOT be presented as cache.
 
 Global automation controls MUST include configuration/profile selection, an
 optional YAML state file, explicit run ID, JSON stdout/file output, log format
 and verbosity, graceful shutdown timeout, machine-readable progress interval,
-Prometheus bind address, OTLP endpoint, audit settings, and WebUI settings.
+audit settings, and WebUI settings. Observability and Slack sink settings are
+YAML-only; Stage 5 does not require global CLI sink flags. Sink settings MUST
+remain outside migration identity and resume-compatibility hashes.
 
 Help text is part of the stable public contract. CLI parsing errors and
 application errors MUST be centralized so every front end receives the same
@@ -241,7 +249,7 @@ final JSON output.
 ### 4.1 YAML model
 
 Configuration MUST be YAML with top-level `source`, `target`, `migration`, and
-optional `profile`, `ai`, and `slack` sections.
+optional `profile`, `ai`, `observability`, and `slack` sections.
 
 Source and target connection settings MUST include:
 
@@ -263,7 +271,9 @@ The migration section MUST support:
 - `strict_consistency` and `strict_consistency_scope: table|migration`;
 - schema drift and schema-contract policy;
 - validation policy;
-- checkpoints, retries, and history retention;
+- checkpoints and retries. Migration-state history remains queryable through
+  `history`, while durable operator log/archive retention belongs to external
+  orchestration. DMTX has no `history_retention_days` setting;
 - ordered date-updated column candidates;
 - deterministic pre-run tuning and deterministic runtime tuning;
 - delete reconciliation policy;
@@ -392,7 +402,7 @@ you choose MUST expose and test these logical responsibilities:
    acknowledgments, checkpoints, replay, and statistics.
 6. **State service**: runs, tasks, progress, fences, leases, snapshots,
    watermarks, histories, and backend capabilities.
-7. **Operational surfaces**: CLI, terminal UI, WebUI, structured output,
+7. **Operational surfaces**: CLI, WebUI, structured output,
    logging, metrics, tracing, and graceful cancellation.
 8. **Deterministic advisory layer**: tuning rules, preflight facts, error
    diagnosis, and optional AI augmentation.
@@ -1099,14 +1109,11 @@ gated by complete inventory and trustworthy row-width evidence.
 
 AI is optional and advisory. Supported provider families SHOULD include hosted
 Anthropic, OpenAI-compatible, Gemini, and local Ollama/LM Studio endpoints.
-AI MAY:
-
-- advise on unmapped or approximate type metadata;
-- review deterministic preflight;
-- explain deterministic tuning;
-- propose config patches and runbooks;
-- advise on schema drift;
-- triage deterministic validation/failure facts.
+Stage 5 AI support is limited to `config-review`: a bounded, display-only
+advisory over sanitized deterministic configuration facts. It MAY summarize
+those facts and identify configuration concerns, but it MUST NOT produce
+runbooks, executable commands, automatic patches, evaluation artifacts, or
+archives. Broader advisory actions require a later explicit contract change.
 
 AI MUST NOT:
 
@@ -1116,9 +1123,9 @@ AI MUST NOT:
 - turn an unsupported feature into silent success;
 - be required for ordinary migration.
 
-All AI output MUST be labeled advisory and cached/invalidated separately from
-deterministic evidence. Provider failure MUST degrade the advisory surface
-without changing migration correctness.
+All AI output MUST be labeled advisory and MUST NOT be persisted or cached by
+DMTX. Provider failure MUST degrade the advisory surface without changing
+migration correctness.
 
 ## 15. Security contract (normative)
 
@@ -1149,7 +1156,8 @@ driver errors and prove absence from every output surface.
 
 ### 16.1 Structured logs
 
-Text logs are default; NDJSON is enabled by `--log-format=json`. Every
+Text logs are default; NDJSON is enabled by YAML
+`observability.log_format: json`. Every
 structured event MUST include timestamp, level, message, run ID, phase, source
 engine, and target engine when a run is active. Resume events identify resume.
 Stable phase names MUST cover preflight, schema extraction, target preparation,
@@ -1346,7 +1354,7 @@ and resume integration scenarios meet Sections 7 through 13.
 
 ### Stage 5: operator surfaces
 
-Deliver stable CLI help/JSON, terminal UI, embedded WebUI security, metrics,
+Deliver stable CLI help/JSON, embedded WebUI security, metrics,
 tracing, notifications, encrypted profiles, setup, diagnosis, and optional AI
 advisories.
 
@@ -1582,7 +1590,7 @@ These are possible ways to organize the work, not requirements:
   makes unsupported behavior explicit.
 - A catalog can hold declarative quoting, discovery, pagination, and context
   facts while imperative native bulk/snapshot operations remain code.
-- A single orchestrator service reused by CLI/TUI/WebUI prevents behavioral
+- A single orchestrator service reused by CLI/WebUI prevents behavioral
   drift.
 - State mutation commands can carry a lease token/generation so fencing is hard
   to omit.
@@ -1593,7 +1601,7 @@ These are possible ways to organize the work, not requirements:
 - A deterministic fault-injection layer around database writes and state writes
   pays for itself early.
 - Keep human rendering outside deterministic fact collection so text, JSON,
-  TUI, WebUI, AI, and audit reuse one result model.
+  WebUI, AI, and audit reuse one result model.
 
 Equivalent or better designs are encouraged.
 
@@ -1607,6 +1615,6 @@ or internal architecture.
 The reference snapshot organizes responsibilities into configuration/secrets,
 catalog-driven drivers, schema planning/rendering, orchestration, transfer,
 checkpointing, tuning, validation, audit/observability, command services,
-terminal UI, and embedded WebUI. This logical decomposition informed the
-contracts above; its exact package layout is intentionally not part of the
-requirements.
+terminal UI, and embedded WebUI. DMTX deliberately replaces the reference TUI
+with CLI/WebUI parity. This logical decomposition informed the contracts above;
+its exact package layout is intentionally not part of the requirements.

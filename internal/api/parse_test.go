@@ -202,7 +202,7 @@ func TestParseAgreesWithTheCommandLine(t *testing.T) {
 		"init --config m.yaml --force",
 		"init --config=m.yaml --force",
 		"profile save prod @m.yaml",
-		`ai runbook @m.yaml --timeout=90s --request "focus on indexes"`,
+		`ai config-review @m.yaml --timeout=90s --request "focus on indexes"`,
 	} {
 		t.Run(line, func(t *testing.T) {
 			body := parseLine(t, server, line)
@@ -265,7 +265,7 @@ func TestParseNormalizesTheConsoleSlashOnlyAtTheCommandPosition(t *testing.T) {
 		{
 			name:     "two slashes are not silently accepted",
 			line:     "//status --state state.db",
-			contains: "/status",
+			contains: "unknown command",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -308,8 +308,8 @@ func TestParseAnswersTheLinesThatAnswerThemselves(t *testing.T) {
 		{"version", app.Version},
 		{"help", "dmtx"},
 		{"--help", "dmtx"},
-		{"", "DMTX terminal UI is planned"},
-		{"nonsense-command", "nonsense-command"},
+		{"", "dmtx serve"},
+		{"nonsense-command", "unknown command"},
 	} {
 		t.Run(testCase.line, func(t *testing.T) {
 			body := parseLine(t, server, testCase.line)

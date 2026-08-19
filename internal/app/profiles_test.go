@@ -116,7 +116,7 @@ func TestProfileCommandSaveListDelete(t *testing.T) {
 	}
 }
 
-func TestProfileExportWritesOwnerOnlyPlaintext(t *testing.T) {
+func TestProfileExportIsRefusedUntilProtectedRoundTripExists(t *testing.T) {
 	profilesPath, secretsPath := profileTestPaths(t)
 	open := func() (*profiles.Store, error) {
 		return profiles.OpenWithSecrets(profilesPath, secretsPath)
@@ -139,40 +139,18 @@ func TestProfileExportWritesOwnerOnlyPlaintext(t *testing.T) {
 	result := executeProfileWithStore(newOutcome("profile"), Request{
 		Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: output,
 	}, open)
-	if result.ExitCode != Success {
+	if result.ExitCode != ConfigurationError {
 		t.Fatalf("export outcome: %+v", result)
 	}
-	wantMessage := "exported plaintext profile prod to " + output
-	if len(result.Messages) != 1 || result.Messages[0].Text != wantMessage {
-		t.Fatalf("export messages = %+v, want %q", result.Messages, wantMessage)
+	if got := strings.Join(messageTexts(result), "\n"); !strings.Contains(got, "deferred") {
+		t.Fatalf("export refusal = %q", got)
 	}
 	data, err := os.ReadFile(output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != string(profileTestConfig()) {
-		t.Fatalf("export bytes = %q, want saved config", data)
-	}
-	info, err := os.Stat(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("export permissions = %04o, want 0600", info.Mode().Perm())
-	}
-
-	failure := executeProfileWithStore(newOutcome("profile"), Request{
-		Command: "profile", ProfileAction: "export", ProfileName: "prod", OutputPath: t.TempDir(),
-	}, open)
-	if failure.ExitCode != FileError {
-		t.Fatalf("failed export outcome: %+v", failure)
-	}
-	failureText := strings.Join(messageTexts(failure), "\n")
-	if !strings.Contains(failureText, "export plaintext profile:") {
-		t.Fatalf("failed export message = %q, want plaintext warning", failureText)
-	}
-	if strings.Contains(failureText, "export encrypted profile") {
-		t.Fatalf("failed export message incorrectly describes plaintext as encrypted: %q", failureText)
+	if string(data) != "old" {
+		t.Fatalf("deferred export wrote plaintext: %q", data)
 	}
 }
 

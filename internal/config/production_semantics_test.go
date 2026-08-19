@@ -388,6 +388,11 @@ func TestParseRejectsUnknownProductionSemanticsFields(t *testing.T) {
 			yaml: "migration:\n  deletes:\n    reconcile:\n      batchsize: 10",
 			want: "migration.deletes.reconcile.batchsize is unsupported",
 		},
+		{
+			name: "Slack typo",
+			yaml: "slack:\n  future_compatible: true",
+			want: "slack.future_compatible is unsupported",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -402,8 +407,6 @@ func TestParseRejectsUnknownProductionSemanticsFields(t *testing.T) {
 profile:
   future_compatible: true
 ai:
-  future_compatible: true
-slack:
   future_compatible: true
 migration: {}
 `)); err != nil {

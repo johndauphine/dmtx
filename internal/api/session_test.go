@@ -372,7 +372,7 @@ func TestSessionListingDescribesEveryKey(t *testing.T) {
 		Defaults []struct {
 			Key         string `json:"key"`
 			Description string `json:"description"`
-			Value       string `json:"value"`
+			Set         bool   `json:"set"`
 		} `json:"defaults"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
@@ -385,5 +385,11 @@ func TestSessionListingDescribesEveryKey(t *testing.T) {
 		if described.Description == "" {
 			t.Errorf("the key %q is listed with no description to show", described.Key)
 		}
+		if described.Key == SessionConfig && !described.Set {
+			t.Error("set config default was reported unset")
+		}
+	}
+	if strings.Contains(recorder.Body.String(), "/set.yaml") {
+		t.Fatal("session listing exposed an unrestricted server-side path")
 	}
 }

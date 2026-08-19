@@ -135,7 +135,7 @@ func (server *Server) parse(writer http.ResponseWriter, request *http.Request) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&asked); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
-			"error": "malformed request: " + err.Error(),
+			"error": "malformed request",
 		})
 		return
 	}

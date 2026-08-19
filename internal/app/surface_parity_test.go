@@ -57,41 +57,19 @@ func TestNoSurfaceCallsARegisteredCommandUnknown(t *testing.T) {
 	}
 }
 
-// TestUnimplementedCommandsAreCalledPlannedByBothSurfaces pins the agreement
-// itself, not merely the absence of "unknown".
-func TestUnimplementedCommandsAreCalledPlannedByBothSurfaces(t *testing.T) {
+// TestNoShippedSurfaceCallsACommandPlanned keeps final operator wording
+// honest: commands are routed, browser-local, or deliberately refused.
+func TestNoShippedSurfaceCallsACommandPlanned(t *testing.T) {
 	runEveryCommandSomewhereDisposable(t)
-	planned := 0
 	for _, registered := range contract.Commands {
-		if registered.TUI == contract.Omitted && registered.WebUI == contract.Omitted {
-			continue
-		}
 		var out, errOut bytes.Buffer
 		Run([]string{registered.Name}, &out, &errOut)
 		commandLine := out.String() + errOut.String()
-		if !strings.Contains(commandLine, "is planned in this stage") {
-			continue // implemented; its answer depends on its arguments
-		}
-		planned++
-
 		outcome := Execute(context.Background(), Request{Command: registered.Name})
 		seam := saidBy(outcome)
-		if !strings.Contains(seam, "is planned in this stage") {
-			t.Errorf(
-				"the command line calls %q planned but Execute says %q",
-				registered.Name, strings.TrimSpace(seam),
-			)
+		if strings.Contains(commandLine, "planned") || strings.Contains(seam, "planned") {
+			t.Errorf("%q still advertises planned behavior: CLI=%q Execute=%q", registered.Name, strings.TrimSpace(commandLine), strings.TrimSpace(seam))
 		}
-		if outcome.ExitCode != Success {
-			t.Errorf(
-				"Execute failed a planned command %q with exit %d; the command "+
-					"line exits 0",
-				registered.Name, outcome.ExitCode,
-			)
-		}
-	}
-	if planned == 0 {
-		t.Fatal("no command reported as planned; this test proved nothing")
 	}
 }
 

@@ -16,7 +16,7 @@ import (
 	"github.com/johndauphine/dmtx/internal/secrets"
 )
 
-func TestAIArgumentsAcceptDMTConfigReviewSpellings(t *testing.T) {
+func TestAIArgumentsAcceptOnlySafeConfigReview(t *testing.T) {
 	request, ok := aiArguments([]string{"config-review", "--config", "migration.yaml", "--timeout", "12"})
 	if !ok {
 		t.Fatal("config-review arguments were rejected")
@@ -25,15 +25,10 @@ func TestAIArgumentsAcceptDMTConfigReviewSpellings(t *testing.T) {
 		t.Fatalf("unexpected request: %+v", request)
 	}
 
-	request, ok = aiArguments([]string{
+	if _, ok := aiArguments([]string{
 		"runbook", "@migration.yaml", "--timeout=1m30s", "--request", "focus", "on", "indexes",
-	})
-	if !ok {
-		t.Fatal("DMT runbook alias and argument syntax were rejected")
-	}
-	if request.AIAction != "config-review" || request.ConfigPath != "migration.yaml" ||
-		request.AITimeout != 90 || request.AIRequest != "focus on indexes" {
-		t.Fatalf("unexpected runbook request: %+v", request)
+	}); ok {
+		t.Fatal("unsafe runbook alias was accepted")
 	}
 }
 
@@ -185,6 +180,55 @@ func TestExecuteAIWithMockedInvalidResponseSurfacesSafeClass(t *testing.T) {
 	}
 	if !strings.Contains(saidBy(outcome), "response schema_validation") {
 		t.Fatalf("safe parse class was not surfaced: %v", outcome.Messages)
+	}
+}
+
+func TestExecuteAIRejectsCredentialShapedProviderOutput(t *testing.T) {
+	const sentinel = "password=provider-secret-sentinel"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		response := map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]string{
+						"content": `{"summary":"` + sentinel + `","findings":[],"warnings":[]}`,
+					},
+				},
+			},
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(response)
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "migration.yaml")
+	configuration := "source:\n  type: sqlite\n  database: source.db\ntarget:\n  type: sqlite\n  database: target.db\nai:\n  provider: lmstudio\n  base_url: " + server.URL + "\n  model: qwen-local\n"
+	if err := os.WriteFile(path, []byte(configuration), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome := executeAIWith(
+		context.Background(),
+		Request{Command: "ai", AIAction: "config-review", ConfigPath: path},
+		func() (secrets.Config, error) { return secrets.Config{}, nil },
+	)
+	if outcome.ExitCode != ConfigurationError {
+		t.Fatalf("exit code = %d, messages = %v", outcome.ExitCode, outcome.Messages)
+	}
+	if outcome.Payload == nil || outcome.Payload.Kind != PayloadAIAdvisory {
+		t.Fatalf("payload = %+v", outcome.Payload)
+	}
+	var payload aiAdvisoryPayload
+	if err := json.Unmarshal(outcome.Payload.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Status != "invalid_response" || payload.Error != "response_credential_output" {
+		t.Fatalf("safe credential rejection payload = %+v", payload)
+	}
+	encoded, err := json.Marshal(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), sentinel) {
+		t.Fatal("credential-shaped provider output reached the public outcome")
 	}
 }
 
