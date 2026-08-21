@@ -17,7 +17,9 @@ import (
 	"github.com/johndauphine/dmtx/internal/state"
 )
 
-const Version = "0.3.0-dev"
+// Version is overridden in release builds with -ldflags -X. Keeping a useful
+// development value makes ordinary local builds and tests self-describing.
+var Version = "0.3.0-dev"
 
 const (
 	Success = iota
@@ -368,6 +370,7 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
+	appendConfigDiagnostics(out, cfg)
 	if err := applyInvocationOverrides(&cfg, request); err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}

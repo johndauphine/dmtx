@@ -70,6 +70,7 @@ func executeConfig(request Request) Outcome {
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
+	appendConfigDiagnostics(out, cfg)
 
 	report := describeConfig(origin, cfg)
 	for _, line := range report.lines() {

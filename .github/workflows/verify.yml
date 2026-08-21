@@ -85,6 +85,12 @@ jobs:
         with:
           version: v2.12.2
 
+      - name: Install pinned Go vulnerability scanner
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Scan reachable dependencies for known vulnerabilities
+        run: govulncheck ./...
+
       - name: Detect data races
         run: go test -race ./...
 

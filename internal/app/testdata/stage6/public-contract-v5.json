@@ -1,0 +1,40 @@
+{
+  "major": 5,
+  "commands": [
+    "run", "resume", "status", "history", "validate", "diagnose",
+    "preflight", "analyze", "profile", "ai", "init", "init-secrets",
+    "setup", "config", "serve"
+  ],
+  "aliases": {
+    "health-check": "preflight",
+    "webui": "serve",
+    "gui": "serve"
+  },
+  "exit_codes": {
+    "success": 0,
+    "configuration": 1,
+    "connection": 2,
+    "transfer": 3,
+    "validation": 4,
+    "cancelled": 5,
+    "state": 6,
+    "file": 7
+  },
+  "deprecations": [
+    {
+      "field": "migration.schema_evolution",
+      "replacement": "migration.schema_contract",
+      "removal_version": "6"
+    },
+    {
+      "field": "migration.ai_adjust",
+      "replacement": "migration.runtime_tuning",
+      "removal_version": "6"
+    },
+    {
+      "field": "migration.ai_adjust_interval",
+      "replacement": "migration.runtime_tuning_interval",
+      "removal_version": "6"
+    }
+  ]
+}

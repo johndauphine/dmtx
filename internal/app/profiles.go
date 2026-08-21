@@ -83,9 +83,11 @@ func executeProfileWithStore(
 		if err != nil {
 			return out.failWith(FileError, "read configuration: "+err.Error())
 		}
-		if _, err := config.Parse(data); err != nil {
+		cfg, err := config.Parse(data)
+		if err != nil {
 			return out.failWith(ConfigurationError, "configuration: "+err.Error())
 		}
+		appendConfigDiagnostics(out, cfg)
 		store, err := open()
 		if err != nil {
 			return out.failWith(FileError, "open encrypted profile store: "+err.Error())

@@ -1,0 +1,30 @@
+version: 0
+runs:
+  - id: completed-v0
+    source: source.db
+    target: target.db
+    outcome: success
+    resumable: false
+    resumability_reason: completed
+    started_at: 2025-01-02T03:04:05Z
+    ended_at: 2025-01-02T03:05:05Z
+  - id: ambiguous-v0
+    source: source.db
+    target: target.db
+    outcome: failed
+    resumable: true
+    resumability_reason: interrupted before typed checkpoint identity
+    started_at: 2025-01-03T03:04:05Z
+    ended_at: 2025-01-03T03:05:05Z
+tasks:
+  - run_id: completed-v0
+    table: accounts
+    status: completed
+    rows_done: 2
+    started_at: 2025-01-02T03:04:05Z
+    completed_at: 2025-01-02T03:05:00Z
+  - run_id: ambiguous-v0
+    table: accounts
+    status: running
+    rows_done: 1
+    started_at: 2025-01-03T03:04:05Z

@@ -26,6 +26,7 @@ func executeValidate(ctx context.Context, request Request) Outcome {
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
+	appendConfigDiagnostics(out, cfg)
 	if err := config.ValidateBoundedStage4Settings(cfg.Migration); err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
