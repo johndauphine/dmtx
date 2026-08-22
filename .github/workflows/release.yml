@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SemVer to embed, without the leading v"
+        description: "DMTX SemVer to embed, without the leading v (for example, 1.0.0-rc.1)"
         required: true
         type: string
 
@@ -191,10 +191,16 @@ jobs:
           path: dist
 
       - name: Publish immutable tag artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            prerelease_flag=(--prerelease)
+          else
+            prerelease_flag=()
+          fi
           if gh release view "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/* --clobber \
@@ -204,5 +210,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "DMTX $version" \
+              "${prerelease_flag[@]}" \
               --generate-notes
           fi

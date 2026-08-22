@@ -19,6 +19,12 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestDevelopmentVersion(t *testing.T) {
+	if Version != "1.0.0-dev" {
+		t.Fatalf("development version = %q, want 1.0.0-dev", Version)
+	}
+}
+
 func TestResumeNetworkPairUsesCanonicalStateSelection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "migration.yaml")
 	configuration := "source:\n  type: sqlite\n  database: source.db\ntarget:\n  type: postgres\n  host: db.example\n  database: target\n  user: dmtx\n"

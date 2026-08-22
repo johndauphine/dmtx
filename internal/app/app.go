@@ -19,7 +19,7 @@ import (
 
 // Version is overridden in release builds with -ldflags -X. Keeping a useful
 // development value makes ordinary local builds and tests self-describing.
-var Version = "0.3.0-dev"
+var Version = "1.0.0-dev"
 
 const (
 	Success = iota

@@ -1,8 +1,10 @@
 # DMTX operator guide
 
 This guide covers installation, upgrade, operation, and recovery for the DMTX
-5.x compatibility line. The reconstruction contract remains authoritative for
-behavior; this document is the release-oriented runbook.
+1.x release line. DMTX 1.x implements the DMT 5.6.0 compatibility target; the
+two version numbers serve different purposes. The reconstruction contract
+remains authoritative for behavior; this document is the release-oriented
+runbook.
 
 ## Install and verify
 
@@ -120,7 +122,7 @@ an upgrade. Verify the new artifact and run `validate`, `preflight`, `status`,
 and `diagnose` against copies or read-only access before resuming production
 work.
 
-DMTX 5.x reads supported historical state and rewrites YAML state to the
+DMTX 1.x reads supported historical state and rewrites YAML state to the
 current format on the next mutation. Completed history is preserved. An
 ambiguous incomplete legacy task remains non-resumable, and a binary refuses a
 newer state format it cannot understand.
