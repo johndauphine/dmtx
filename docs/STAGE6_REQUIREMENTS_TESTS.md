@@ -146,10 +146,12 @@ version smoke tests, SHA-256 manifest generation and pre/post-upload
 verification, native macOS Intel/ARM64 and Windows security/application/API
 tests, and tagged GitHub release publication after every prerequisite passes.
 
-## Closeout evidence
+## Superseded external evidence
 
-The external evidence is complete for `v5.6.0-rc.4` at commit
-`817b4d3720c138859a841adfd56fc2ac9570a8a1`:
+The following external evidence is retained as an audit trail for the
+incorrectly versioned `v5.6.0-rc.4` publication at commit
+`817b4d3720c138859a841adfd56fc2ac9570a8a1`. It does not close the DMTX 1.0
+release gate:
 
 1. [Verify run `32551315762`](https://github.com/johndauphine/dmtx/actions/runs/32551315762)
    passed the offline/static/vulnerability/race gates and the armed five-engine
@@ -164,3 +166,11 @@ The external evidence is complete for `v5.6.0-rc.4` at commit
 5. the workflow executed the candidate version on Linux, macOS, and Windows,
    while an independent execution of the published Linux x86-64 binary also
    reported `5.6.0-rc.4`.
+
+## Required DMTX 1.0 release evidence
+
+The next release candidate is `v1.0.0-rc.1`. Run this repository's Verify and
+tagged Release workflows for that tag, then record the workflow URLs, five
+published artifacts, downloaded `SHA256SUMS` verification, and native
+Linux/macOS/Windows `dmtx --version` output of `1.0.0-rc.1`. Until those steps
+are complete, Stage 6 release closeout remains blocked.

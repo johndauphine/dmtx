@@ -2,14 +2,15 @@
 
 ## Status
 
-Stage 6 is **accepted**. Every required local, GitHub, native-platform,
-checksum, publication, armed-live, and armed-live-race gate passed for release
-candidate `v5.6.0-rc.4` at commit
-`817b4d3720c138859a841adfd56fc2ac9570a8a1`.
+Stage 6 is **reopened and blocked** pending DMTX `v1.0.0-rc.1` publication and
+verification. DMTX's first product release is 1.0; DMT 5.6.0 is the upstream
+compatibility/reference target and must not be used as DMTX's release version.
 
-The closeout documentation follows the tagged commit and changes evidence only;
-the immutable release tag remains attached to the exact code and workflow
-candidate that passed the gates.
+The previously accepted `v5.6.0-rc.4` publication at commit
+`817b4d3720c138859a841adfd56fc2ac9570a8a1` is retained below only as
+explicitly superseded historical evidence. It was published under the wrong
+DMTX product version and cannot close this release gate. The remote tag and
+release are intentionally not altered by this repository correction.
 
 ## Delivered release hardening
 
@@ -32,7 +33,10 @@ candidate that passed the gates.
 - Native macOS Intel/ARM64 and Windows file/config/application/API verification.
 - Release operator, security, acceptance, and requirement-to-test documents.
 
-## Local evidence on 2026-08-21
+## Historical local evidence on 2026-08-21
+
+The checks below are useful historical evidence for the candidate source, but
+they do not verify a DMTX 1.0 release artifact.
 
 | Gate | Result |
 | --- | --- |
@@ -51,7 +55,11 @@ The local race command could not start in the restricted workspace because it
 has no C development headers. The exact-candidate GitHub offline race gate is
 therefore authoritative and passed in run `32551315762`.
 
-## Authoritative external evidence on 2026-08-22
+## Superseded external evidence on 2026-08-22
+
+All evidence in this section concerns the incorrectly versioned
+`v5.6.0-rc.4` publication. It is retained for auditability only and is not
+evidence of a DMTX 1.0 release.
 
 | Evidence | Result |
 | --- | --- |
@@ -64,26 +72,27 @@ therefore authoritative and passed in run `32551315762`.
 
 The earlier `v5.6.0-rc.1`, `v5.6.0-rc.2`, and `v5.6.0-rc.3` tags remain
 untouched failed candidates without published releases. `v5.6.0-rc.4` is the
-first candidate with a clean tagged run and published asset set.
+first candidate with a clean tagged run and published asset set, but all four
+tags use the incorrect DMTX product-version line.
 
-## External acceptance checklist
+## Required DMTX 1.0 external acceptance checklist
 
-At the exact release-candidate commit:
+For the intended DMTX `v1.0.0-rc.1` release commit:
 
-- [x] Verify workflow: offline tests, vet, lint, vulnerability scan, full
+- [ ] Verify workflow: offline tests, vet, lint, vulnerability scan, full
   offline race, and existing builds are green.
-- [x] Armed live job is green with all five fixtures and no unexpected skip.
-- [x] Armed live race job is green from workflow dispatch.
-- [x] Release artifacts workflow is green for macOS Intel/ARM64, Linux
+- [ ] Armed live job is green with all five fixtures and no unexpected skip.
+- [ ] Armed live race job is green from workflow dispatch.
+- [ ] Release artifacts workflow is green for macOS Intel/ARM64, Linux
   x86-64/ARM64, and Windows x86-64.
-- [x] Uploaded checksum verification job is green.
-- [x] Downloaded `SHA256SUMS` validates every published archive.
-- [x] Native Linux, macOS, and Windows binaries report the candidate version.
-- [x] Links to the exact Verify run, Release artifacts run, and tagged release
+- [ ] Uploaded checksum verification job is green.
+- [ ] Downloaded `SHA256SUMS` validates every published archive.
+- [ ] Native Linux, macOS, and Windows binaries report `1.0.0-rc.1`.
+- [ ] Links to the exact Verify run, Release artifacts run, and tagged release
   are recorded here.
 
 ## Acceptance rule
 
-Every checkbox is closed with exact evidence. Stage 6 and the reconstruction
-are accepted while the Stage 3, Stage 4, and Stage 5 boundary decisions remain
-unchanged.
+Every checkbox must be closed with exact `v1.0.0-rc.1` (or later 1.0 RC)
+evidence before Stage 6 and the reconstruction can be accepted again. The
+Stage 3, Stage 4, and Stage 5 boundary decisions remain unchanged.
