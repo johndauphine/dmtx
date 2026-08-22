@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johndauphine/dmtx/internal/privatefs"
 	"github.com/johndauphine/dmtx/internal/schema"
 	_ "modernc.org/sqlite"
 )
@@ -126,6 +127,14 @@ func newDeleteKeySpool(
 	if err != nil {
 		return nil, fmt.Errorf(
 			"create delete reconciliation spool: %w",
+			err,
+		)
+	}
+	if err := privatefs.Restrict(path); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, fmt.Errorf(
+			"restrict delete reconciliation spool: %w",
 			err,
 		)
 	}
@@ -252,10 +261,15 @@ func validateDeleteSpoolPath(
 			err,
 		)
 	}
-	if !info.Mode().IsRegular() ||
-		info.Mode().Perm()&0o077 != 0 {
+	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf(
 			"delete reconciliation spool must be a private regular file",
+		)
+	}
+	if err := privatefs.Validate(resolved); err != nil {
+		return "", fmt.Errorf(
+			"delete reconciliation spool must be a private regular file: %w",
+			err,
 		)
 	}
 	return resolved, nil

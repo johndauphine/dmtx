@@ -6,12 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/migrate"
+	"github.com/johndauphine/dmtx/internal/privatefs"
 	"github.com/johndauphine/dmtx/internal/state"
 	_ "modernc.org/sqlite"
 )
@@ -162,8 +164,11 @@ func TestTableCheckpointObserverExposesFreshAndResumeStage4Contexts(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+			if !info.IsDir() {
 				t.Fatalf("spool mode = %v", info.Mode())
+			}
+			if err := privatefs.Validate(spool); err != nil {
+				t.Fatalf("spool is not private: %v", err)
 			}
 			repeated, found, err := migrate.ResolveStage4RunContext(observer)
 			if err != nil || !found || repeated.SpoolDirectory != spool {
@@ -285,6 +290,9 @@ func TestStage4SpoolDirectoryRejectsDanglingStateSymlinkAndInaccessibleDirectory
 	if _, err := stage4SpoolDirectory(dangling, "dangling-run"); err == nil ||
 		!strings.Contains(err.Error(), "dangling state symlink") {
 		t.Fatalf("dangling state symlink error = %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod cannot create a Windows ACL denial; privatefs has native ACL tests")
 	}
 
 	statePath := filepath.Join(directory, "inaccessible.state.db")

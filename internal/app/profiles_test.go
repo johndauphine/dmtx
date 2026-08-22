@@ -9,13 +9,14 @@ import (
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/profiles"
+	"github.com/johndauphine/dmtx/internal/secrets"
 )
 
 func profileTestPaths(t *testing.T) (string, string) {
 	t.Helper()
 	directory := t.TempDir()
 	secretsPath := filepath.Join(directory, "secrets.yaml")
-	if err := os.WriteFile(secretsPath, []byte("encryption:\n  master_key: \"\"\n"), 0o600); err != nil {
+	if err := secrets.Create(secretsPath, false); err != nil {
 		t.Fatal(err)
 	}
 	return filepath.Join(directory, "profiles.db"), secretsPath

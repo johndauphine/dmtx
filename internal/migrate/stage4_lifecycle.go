@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
+	"github.com/johndauphine/dmtx/internal/privatefs"
 	"github.com/johndauphine/dmtx/internal/schema"
 	"github.com/johndauphine/dmtx/internal/state"
 )
@@ -110,10 +111,11 @@ func validateStage4PrivateDirectory(path, label string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("%s must be a real directory, not a symlink or file", label)
 	}
-	if info.Mode().Perm() != 0o700 {
+	if err := privatefs.Validate(path); err != nil {
 		return fmt.Errorf(
-			"%s permissions must be 0700 (owner-only and owner-accessible)",
+			"%s permissions must be private for the current platform: %w",
 			label,
+			err,
 		)
 	}
 	resolved, err := filepath.EvalSymlinks(path)

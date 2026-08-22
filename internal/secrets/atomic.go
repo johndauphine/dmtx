@@ -15,17 +15,19 @@ type atomicFile interface {
 }
 
 type atomicOps struct {
-	create func(string, string) (atomicFile, error)
-	rename func(string, string) error
-	remove func(string) error
+	create   func(string, string) (atomicFile, error)
+	restrict func(string) error
+	rename   func(string, string) error
+	remove   func(string) error
 }
 
 var defaultAtomicOps = atomicOps{
 	create: func(directory, pattern string) (atomicFile, error) {
 		return os.CreateTemp(directory, pattern)
 	},
-	rename: replaceSecretFile,
-	remove: os.Remove,
+	restrict: restrictSecretPath,
+	rename:   replaceSecretFile,
+	remove:   os.Remove,
 }
 
 // WriteProtectedFile atomically creates or replaces an owner-only regular
@@ -71,6 +73,11 @@ func atomicWrite0600With(path string, data []byte, ops atomicOps) (err error) {
 	}()
 	if err = temporary.Chmod(fileMode); err != nil {
 		return fmt.Errorf("restrict secure temporary file: %w", err)
+	}
+	if ops.restrict != nil {
+		if err = ops.restrict(temporaryPath); err != nil {
+			return fmt.Errorf("restrict secure temporary file access: %w", err)
+		}
 	}
 	if _, err = temporary.Write(data); err != nil {
 		return fmt.Errorf("write secure temporary file: %w", err)

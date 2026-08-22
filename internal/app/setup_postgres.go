@@ -13,6 +13,7 @@ import (
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/engine"
+	"github.com/johndauphine/dmtx/internal/privatefs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -418,7 +419,7 @@ func (setup *PostgresSetup) persist() error {
 	if err := os.MkdirAll(secretsDirectory, 0o700); err != nil {
 		return errors.New("create protected setup secret storage")
 	}
-	if err := os.Chmod(secretsDirectory, 0o700); err != nil {
+	if err := privatefs.Restrict(secretsDirectory); err != nil {
 		_ = os.RemoveAll(secretsDirectory)
 		return errors.New("protect setup secret storage")
 	}
@@ -477,15 +478,24 @@ func writeSetupSecret(path, value string) error {
 	if err != nil {
 		return err
 	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
+	remove := true
+	defer func() {
+		if remove {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}
+	}()
+	if err := privatefs.Restrict(path); err != nil {
 		return err
 	}
 	if _, err := file.WriteString(value + "\n"); err != nil {
-		_ = file.Close()
 		return err
 	}
-	return file.Close()
+	if err := file.Close(); err != nil {
+		return err
+	}
+	remove = false
+	return nil
 }
 
 var _ SetupFlow = (*PostgresSetup)(nil)

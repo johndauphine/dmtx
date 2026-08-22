@@ -171,10 +171,18 @@ func TestAtomicWrite0600DoesNotExposeDataInErrors(t *testing.T) {
 func TestAtomicWrite0600RestrictsBeforeReplacing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	temporary := &fakeAtomicFile{path: filepath.Join(filepath.Dir(path), ".temporary")}
+	restricted := false
 	ops := atomicOps{
 		create: func(string, string) (atomicFile, error) { return temporary, nil },
+		restrict: func(name string) error {
+			if name != temporary.path || temporary.mode != fileMode {
+				t.Fatalf("restricted wrong or unmoded path %q", name)
+			}
+			restricted = true
+			return nil
+		},
 		rename: func(string, string) error {
-			if temporary.mode != fileMode || !temporary.written || !temporary.synced || !temporary.closed {
+			if temporary.mode != fileMode || !restricted || !temporary.written || !temporary.synced || !temporary.closed {
 				t.Fatalf("replacement occurred before temporary file was secured: %+v", temporary)
 			}
 			return nil

@@ -30,6 +30,9 @@ type MemorySnapshot struct {
 	HostAvailableBytes int64
 	CgroupV2           CgroupMemoryEvidence
 	CgroupV1           CgroupMemoryEvidence
+	// ProcessLimit carries a finite process- or job-scoped limit on platforms
+	// without cgroups, such as a Windows Job Object.
+	ProcessLimit CgroupMemoryEvidence
 }
 
 // MemoryProbe makes host/container evidence injectable and deterministic in
@@ -58,6 +61,7 @@ const (
 	ProvenanceHostCapacity      SettingProvenance = "host_capacity"
 	ProvenanceCgroupV2Remaining SettingProvenance = "cgroup_v2_remaining"
 	ProvenanceCgroupV1Remaining SettingProvenance = "cgroup_v1_remaining"
+	ProvenanceProcessRemaining  SettingProvenance = "process_limit_remaining"
 	ProvenanceUserMemoryCeiling SettingProvenance = "user_memory_ceiling"
 	ProvenanceDerived           SettingProvenance = "derived"
 	ProvenanceRequested         SettingProvenance = "requested"
@@ -367,6 +371,27 @@ func resolveDetectedMemory(snapshot MemorySnapshot) (EffectiveBytes, error) {
 		}
 	default:
 		return EffectiveBytes{}, fmt.Errorf("unknown cgroup memory state %q", evidence.State)
+	}
+	process := snapshot.ProcessLimit
+	switch process.State {
+	case "", CgroupLimitAbsent, CgroupLimitUnlimited:
+	case CgroupLimitUnknown:
+		return EffectiveBytes{}, fmt.Errorf("process memory evidence is present but not safely resolvable")
+	case CgroupLimitFinite:
+		if process.LimitBytes <= 0 || process.CurrentBytes < 0 || process.CurrentBytes >= process.LimitBytes {
+			return EffectiveBytes{}, fmt.Errorf(
+				"invalid or exhausted finite process memory evidence: limit=%d current=%d",
+				process.LimitBytes,
+				process.CurrentBytes,
+			)
+		}
+		remaining := process.LimitBytes - process.CurrentBytes
+		if remaining < detected {
+			detected = remaining
+			provenance = ProvenanceProcessRemaining
+		}
+	default:
+		return EffectiveBytes{}, fmt.Errorf("unknown process memory state %q", process.State)
 	}
 	if detected <= 0 {
 		return EffectiveBytes{}, fmt.Errorf("no safe finite memory budget is available")
