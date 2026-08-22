@@ -3,11 +3,17 @@
 DMTX is a clean-room Go reimplementation of DMT, guided by the reconstruction
 specification in [docs/RECREATE_DMT.md](docs/RECREATE_DMT.md).
 
-The Stage 2-supported migration path is SQLite-to-SQLite. It is executable,
-bounded, fenced, and restartable rather than a mock interface. Stage 3 adds the
-fresh-run network adapter and capability scope described below. Its mandatory
-network/ClickHouse matrices and repository gates pass in normal and race modes.
-Stage 3 does not extend SQLite's Stage 2 restart guarantees to network routes.
+Stages 0 through 5 of the reconstruction are accepted. DMTX provides bounded,
+fenced, restartable migration routes, production data semantics, an
+authenticated loopback WebUI, observability, encrypted profiles, and shared
+CLI/API behavior. Stage 6 adds release hardening: reproducible cross-platform
+artifacts, checksums, upgrade and compatibility fixtures, vulnerability and
+concurrency gates, native-platform checks, and operator documentation.
+
+Release installation, upgrade, rollback, recovery, security, and checksum
+instructions are in [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md). The
+release acceptance map is
+[docs/STAGE6_ACCEPTANCE_MATRIX.md](docs/STAGE6_ACCEPTANCE_MATRIX.md).
 
 ## Current SQLite workflow
 
@@ -124,9 +130,9 @@ requires explicit operator confirmation:
 The same inspection commands accept the default SQLite path
 `migration.yaml.state.db`.
 
-## Stage 3 fresh-run network adapters
+## Supported engines and route boundaries
 
-The Stage 3 branch implements all 12 directed cross-engine relational pairs
+The implementation includes all 12 directed cross-engine relational pairs
 among SQLite, PostgreSQL, SQL Server, and Oracle MySQL, together with the four
 same-engine fixtures. MariaDB is independently certified as the MySQL-family
 source or target for PostgreSQL, SQL Server, and SQLite routes and for
@@ -159,13 +165,12 @@ bulk path described below. SQLite remains a bounded single-writer target.
 ClickHouse uses bounded native batches and is rebuild-only; upsert is rejected
 before adapter construction or target mutation.
 
-This is a fresh `dmtx run` certification boundary. It does not certify
-network-engine resume after process termination, checkpoint replay and fencing
-under faults, strict source consistency, incremental watermarks, delete
-reconciliation, or schema evolution. Those are Stage 4 concerns. Strict
-consistency is currently rejected before adapter construction;
-SQLite-to-SQLite remains the only route with the Stage 2 restartability
-guarantees documented above.
+Stage 4 extends certified routes with durable replay/fencing, incremental
+watermarks, admitted delete reconciliation, schema contracts and evolution,
+deep validation, and engine-specific strict-consistency scopes. Unsupported
+route/capability combinations remain explicit pre-mutation refusals; see the
+normative matrix and operator guide rather than assuming every feature applies
+to every directed pair.
 
 The SQL Server-to-SQLite route currently supports fresh drop/recreate only.
 It preserves the admitted integral, bit, floating-point, UTF-8 text, binary,
@@ -231,11 +236,12 @@ acknowledging the batch.
 
 ## Scope and roadmap
 
-This is not yet the full DMT compatibility target. Stage 4 data semantics,
-richer schema evolution, deep validation, WebUI/TUI, and release hardening
-remain staged work. The complete specification and staged acceptance
-requirements are in
-[docs/RECREATE_DMT.md](docs/RECREATE_DMT.md).
+Stage 6 is the final stage in the current roadmap. Its implementation is ready
+for release-candidate CI and live-gate evidence; completion is not claimed
+until those external gates are green at the exact candidate commit. The
+complete specification is in [docs/RECREATE_DMT.md](docs/RECREATE_DMT.md), and
+the requirement-to-test index is in
+[docs/STAGE6_REQUIREMENTS_TESTS.md](docs/STAGE6_REQUIREMENTS_TESTS.md).
 
 ## Development
 
@@ -244,5 +250,7 @@ Production packages and their tests are kept under separate files in
 
 ```sh
 go test ./...
+go vet ./...
+govulncheck ./...
 go build -o dmtx ./cmd/dmtx
 ```

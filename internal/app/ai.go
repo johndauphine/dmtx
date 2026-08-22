@@ -87,6 +87,7 @@ func executeAIWith(ctx context.Context, request Request, load func() (secrets.Co
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
+	appendConfigDiagnostics(out, cfg)
 	global, err := load()
 	if err != nil {
 		switch {

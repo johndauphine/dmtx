@@ -34,6 +34,7 @@ func executePreflightWithProbe(
 	if err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}
+	appendConfigDiagnostics(out, cfg)
 	if err := applyInvocationOverrides(&cfg, request); err != nil {
 		return out.failWith(ConfigurationError, "configuration: "+err.Error())
 	}

@@ -1,0 +1,205 @@
+name: Release artifacts
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer to embed, without the leading v"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  artifacts:
+    name: Build and verify release artifacts
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve and validate version
+        id: version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${DISPATCH_VERSION#v}"
+          fi
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'; then
+            echo "version is not SemVer: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Test release source
+        run: go test ./...
+
+      - name: Build all release platforms
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p dist
+          ldflags="-s -w -X github.com/johndauphine/dmtx/internal/app.Version=$VERSION"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="dmtx_${VERSION}_${os}_${arch}"
+            if [ "$os" = windows ]; then
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "$ldflags" -o "dist/dmtx.exe" ./cmd/dmtx
+              (cd dist && zip -q "${name}.zip" dmtx.exe && rm dmtx.exe)
+            else
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "$ldflags" -o "dist/dmtx" ./cmd/dmtx
+              tar -C dist -czf "dist/${name}.tar.gz" dmtx
+              rm dist/dmtx
+            fi
+          done
+
+      - name: Create and verify SHA-256 checksums
+        working-directory: dist
+        run: |
+          sha256sum dmtx_* > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Verify Linux artifact version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir verify
+          tar -xzf "dist/dmtx_${VERSION}_linux_amd64.tar.gz" -C verify
+          test "$(verify/dmtx --version)" = "$VERSION"
+
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dmtx-${{ steps.version.outputs.version }}
+          path: |
+            dist/dmtx_*
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  native-smoke:
+    name: Native smoke (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Intel
+            runner: macos-15-intel
+          - name: macOS ARM64
+            runner: macos-15
+          - name: Windows x86-64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${DISPATCH_VERSION#v}"
+          fi
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'; then
+            echo "version is not SemVer: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Run native file, configuration, application, and API tests
+        run: go test ./internal/secrets ./internal/config ./internal/app ./internal/api -count=1
+
+      - name: Build and execute native version smoke test
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          suffix=
+          if [ "${RUNNER_OS}" = Windows ]; then
+            suffix=.exe
+          fi
+          go build -trimpath -ldflags "-s -w -X github.com/johndauphine/dmtx/internal/app.Version=$VERSION" -o "dmtx${suffix}" ./cmd/dmtx
+          test "$(./dmtx${suffix} --version)" = "$VERSION"
+
+  uploaded-checksums:
+    name: Verify uploaded checksum manifest
+    needs: artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${DISPATCH_VERSION#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download uploaded release artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dmtx-${{ steps.version.outputs.version }}
+          path: dist
+
+      - name: Verify downloaded SHA-256 manifest
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+
+  publish:
+    name: Publish tagged release
+    if: github.event_name == 'push'
+    needs: [artifacts, native-smoke, uploaded-checksums]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dmtx-${{ needs.artifacts.outputs.version }}
+          path: dist
+
+      - name: Publish immutable tag artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --verify-tag \
+              --title "DMTX $version" \
+              --generate-notes
+          fi
