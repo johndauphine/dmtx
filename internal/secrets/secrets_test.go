@@ -131,20 +131,15 @@ func TestForceReplacesAndTightens(t *testing.T) {
 // anything. Written 0600 and later loosened, the file must stop being readable
 // by dmtx rather than being read with a warning nobody sees.
 func TestLoadRefusesAFileOtherAccountsCanRead(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX mode bits do not represent Windows ACLs")
-	}
 	path := filepath.Join(t.TempDir(), fileName)
-	if err := os.WriteFile(path, []byte("encryption:\n  master_key: \"k\"\n"), 0o600); err != nil {
+	if err := WriteProtectedFile(path, []byte("encryption:\n  master_key: \"k\"\n")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err != nil {
 		t.Fatalf("a correctly protected file did not load: %v", err)
 	}
 
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	makeTestSecretInsecure(t, path)
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("a world-readable secrets file was loaded")
@@ -152,8 +147,11 @@ func TestLoadRefusesAFileOtherAccountsCanRead(t *testing.T) {
 	if !errors.Is(err, ErrInsecurePermissions) {
 		t.Errorf("the refusal is not identifiable as a permissions problem: %v", err)
 	}
-	if !strings.Contains(err.Error(), "chmod") {
+	if runtime.GOOS != "windows" && !strings.Contains(err.Error(), "chmod") {
 		t.Errorf("the refusal does not say how to fix it: %v", err)
+	}
+	if runtime.GOOS == "windows" && !strings.Contains(err.Error(), "Windows ACL") {
+		t.Errorf("the refusal does not identify the Windows ACL repair: %v", err)
 	}
 }
 

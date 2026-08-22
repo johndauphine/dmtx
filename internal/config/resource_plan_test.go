@@ -86,6 +86,36 @@ func TestResolveEffectiveTransferPlanUsesFiniteCgroupV2BudgetAndCapsConcurrency(
 	}
 }
 
+func TestResolveEffectiveTransferPlanUsesFiniteProcessLimit(t *testing.T) {
+	const (
+		limit = 512 * testMiB
+		used  = 128 * testMiB
+	)
+	plan, err := ResolveEffectiveTransferPlan(
+		context.Background(),
+		Migration{},
+		TransferPlanOptions{LogicalCPUs: 8},
+		fakeMemoryProbe{snapshot: MemorySnapshot{
+			HostCapacityBytes:  16 * testGiB,
+			HostAvailableBytes: 8 * testGiB,
+			CgroupV2:           CgroupMemoryEvidence{State: CgroupLimitAbsent},
+			CgroupV1:           CgroupMemoryEvidence{State: CgroupLimitAbsent},
+			ProcessLimit: CgroupMemoryEvidence{
+				State:        CgroupLimitFinite,
+				LimitBytes:   limit,
+				CurrentBytes: used,
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DetectedMemoryLimit.Value != limit-used ||
+		plan.DetectedMemoryLimit.Provenance != ProvenanceProcessRemaining {
+		t.Fatalf("process-scoped memory = %#v", plan.DetectedMemoryLimit)
+	}
+}
+
 func TestResolveEffectiveTransferPlanHonorsConnectionLimitAndProvenance(
 	t *testing.T,
 ) {
@@ -249,6 +279,14 @@ func TestResolveEffectiveTransferPlanFailsClosedWithoutSafeFiniteEvidence(t *tes
 				HostCapacityBytes:  64 * testGiB,
 				HostAvailableBytes: 32 * testGiB,
 				CgroupV2:           CgroupMemoryEvidence{State: CgroupLimitUnknown},
+			}},
+		},
+		{
+			name: "unknown process limit does not fall back to host",
+			probe: fakeMemoryProbe{snapshot: MemorySnapshot{
+				HostCapacityBytes:  64 * testGiB,
+				HostAvailableBytes: 32 * testGiB,
+				ProcessLimit:       CgroupMemoryEvidence{State: CgroupLimitUnknown},
 			}},
 		},
 		{

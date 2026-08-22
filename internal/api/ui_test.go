@@ -112,9 +112,15 @@ func TestConsoleAssetsKeepDataOutOfHTMLConstructionPaths(t *testing.T) {
 	}
 }
 
+// normalizedConsoleJS makes shipped-byte assertions independent of Git's
+// native checkout line endings. Browser behavior is identical for LF and CRLF.
+func normalizedConsoleJS() string {
+	return strings.ReplaceAll(string(consoleJS), "\r\n", "\n")
+}
+
 func TestConsoleHasSemanticPaletteAndBrowserOnlyCommands(t *testing.T) {
 	html := string(consoleHTML)
-	js := string(consoleJS)
+	js := normalizedConsoleJS()
 	for _, expected := range []string{
 		`role="combobox"`, `aria-controls="suggestions"`, `aria-expanded="false"`,
 		`id="suggestions" role="listbox"`, `id="console-status" role="status"`,
@@ -191,7 +197,7 @@ func TestConsoleRouteMarkersReachTheRegisteredMux(t *testing.T) {
 func TestConsoleCommandCompletionKeepsArgumentsAndFirstEnter(t *testing.T) {
 	// Shipped-byte evidence for the browser logic. It guards the contract of
 	// this branch without pretending Go has executed the keyboard interaction.
-	js := string(consoleJS)
+	js := normalizedConsoleJS()
 	for _, expected := range []string{
 		"function commandCompletionContext()", "leading: match[1]", "suffix: line.value.slice(match[0].length)",
 		"line.value = context.leading + \"/\" + item.spelling + (context.suffix || \" \");",
@@ -231,7 +237,7 @@ func TestConsoleCommandCompletionKeepsArgumentsAndFirstEnter(t *testing.T) {
 }
 
 func TestConsoleHistoryAndMaskedSetupProtectionsAreShipped(t *testing.T) {
-	js := string(consoleJS)
+	js := normalizedConsoleJS()
 	for _, expected := range []string{
 		"slice(0, 50)", "new Set", "historyDraft", "recallHistory", "isSetupInvocation",
 		"legacyHistoryKey", "dmtx-console-history-v2", "localStorage.removeItem(legacyHistoryKey)",
@@ -256,7 +262,7 @@ func TestConsoleHistoryAndMaskedSetupProtectionsAreShipped(t *testing.T) {
 // browser JavaScript; this instead guards the shipped code's explicit
 // public-field mapping and bounded output.
 func TestConsoleRendersStructuredPayloads(t *testing.T) {
-	js := string(consoleJS)
+	js := normalizedConsoleJS()
 	for _, expected := range []string{
 		"const maxRenderedRuns = 50", "const maxRenderedFieldLength = 512",
 		"function boundedPayloadText(value)", "function payloadRecord(value)",

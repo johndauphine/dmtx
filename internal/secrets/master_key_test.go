@@ -11,7 +11,7 @@ import (
 func TestEnsureMasterKeyCreatesAndPreservesExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	input := []byte("# keep\nencryption:\n  master_key: \"\"\nfuture:\n  setting: retained\n")
-	if err := os.WriteFile(path, input, fileMode); err != nil {
+	if err := WriteProtectedFile(path, input); err != nil {
 		t.Fatal(err)
 	}
 	first, err := EnsureMasterKey(path)
@@ -40,18 +40,16 @@ func TestEnsureMasterKeyCreatesAndPreservesExisting(t *testing.T) {
 func TestEnsureMasterKeyRejectsInvalidOrInsecureKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	input := []byte("encryption:\n  master_key: \"bad\"\n")
-	if err := os.WriteFile(path, input, fileMode); err != nil {
+	if err := WriteProtectedFile(path, input); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := EnsureMasterKey(path); err == nil {
 		t.Fatal("invalid key accepted")
 	}
-	if err := os.WriteFile(path, []byte("encryption:\n  master_key: \""+base64.RawStdEncoding.EncodeToString(make([]byte, 32))+"\"\n"), fileMode); err != nil {
+	if err := WriteProtectedFile(path, []byte("encryption:\n  master_key: \""+base64.RawStdEncoding.EncodeToString(make([]byte, 32))+"\"\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	makeTestSecretInsecure(t, path)
 	if _, err := EnsureMasterKey(path); err == nil {
 		t.Fatal("insecure file accepted")
 	}

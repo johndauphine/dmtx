@@ -15,11 +15,12 @@
 // file lives in the platform config directory; the familiarity was judged worth
 // the split.
 //
-// What this protects, and what it does not: mode 0600 and a refusal to load a
-// looser file keep other accounts on the machine out. They do not protect
-// against somebody holding the disk - that is full-disk encryption's job. The
-// distinction matters because a store that implied more would invite putting
-// things in it that deserve better.
+// What this protects, and what it does not: owner-only Unix modes or a
+// protected current-account Windows ACL, plus refusal to load a looser file,
+// keep other accounts on the machine out. They do not protect against somebody
+// holding the disk - that is full-disk encryption's job. The distinction
+// matters because a store that implied more would invite putting things in it
+// that deserve better.
 package secrets
 
 import (
@@ -136,7 +137,7 @@ func ValidateSharedDirectoryPermissions(path string) error {
 
 func checkDirectory(directory string) error {
 	if runtime.GOOS == "windows" {
-		return nil
+		return validatePlatformPermissions(directory, ErrInsecureDirectory)
 	}
 	info, err := os.Stat(directory)
 	if err != nil {
@@ -151,7 +152,8 @@ func checkDirectory(directory string) error {
 	return nil
 }
 
-// ValidatePermissions reports whether the file is readable beyond its owner.
+// ValidatePermissions reports whether the file is readable beyond its owner
+// on Unix or the current account on Windows.
 //
 // os.Stat rather than os.Lstat, so a symlink is judged by what it points at: a
 // world-readable file reached through a private link is still world-readable.
@@ -161,9 +163,7 @@ func ValidatePermissions(path string) error {
 		return fmt.Errorf("check secret file permissions: %w", err)
 	}
 	if runtime.GOOS == "windows" {
-		// POSIX mode bits do not represent Windows ACLs, so a check here would
-		// report a reassuring answer it has not established.
-		return nil
+		return validatePlatformPermissions(path, ErrInsecurePermissions)
 	}
 	if mode := info.Mode().Perm(); mode&0o077 != 0 {
 		return fmt.Errorf(
@@ -209,6 +209,9 @@ func Create(path string, force bool) error {
 	if err := os.Chmod(own, directoryMode); err != nil {
 		return fmt.Errorf("restrict secrets directory: %w", err)
 	}
+	if err := restrictSecretPath(own); err != nil {
+		return fmt.Errorf("restrict secrets directory access: %w", err)
+	}
 	// A mode argument applies only when a file is created, so an existing file
 	// replaced with --force would keep whatever mode it had. Chmod covers that;
 	// the same defect has now been found twice elsewhere in this codebase.
@@ -219,6 +222,10 @@ func Create(path string, force bool) error {
 	if err := file.Chmod(fileMode); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("restrict secrets: %w", err)
+	}
+	if err := restrictSecretPath(path); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("restrict secrets access: %w", err)
 	}
 	if _, err := file.WriteString(Template); err != nil {
 		_ = file.Close()
