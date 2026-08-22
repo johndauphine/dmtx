@@ -146,14 +146,21 @@ version smoke tests, SHA-256 manifest generation and pre/post-upload
 verification, native macOS Intel/ARM64 and Windows security/application/API
 tests, and tagged GitHub release publication after every prerequisite passes.
 
-## Closeout evidence still requiring external execution
+## Closeout evidence
 
-The implementation and local tests are necessary but cannot manufacture
-GitHub-hosted or live-database evidence. Before Stage 6 closeout, record:
+The external evidence is complete for `v5.6.0-rc.4` at commit
+`817b4d3720c138859a841adfd56fc2ac9570a8a1`:
 
-1. a green Verify run at the exact release-candidate commit;
-2. a green full armed live run and race run with no unexpected skips;
-3. a green Release artifacts workflow including all native jobs;
-4. a downloaded artifact whose `SHA256SUMS` verification succeeds; and
-5. the release candidate's `--version` output on at least Linux, macOS, and
-   Windows.
+1. [Verify run `32551315762`](https://github.com/johndauphine/dmtx/actions/runs/32551315762)
+   passed the offline/static/vulnerability/race gates and the armed five-engine
+   live suite both normally and under the race detector;
+2. [Release artifacts run `32551007314`](https://github.com/johndauphine/dmtx/actions/runs/32551007314)
+   passed all five builds, macOS Intel/ARM64 and Windows native tests, embedded
+   version executions, and pre/post-upload checksum verification;
+3. the [published `v5.6.0-rc.4` release](https://github.com/johndauphine/dmtx/releases/tag/v5.6.0-rc.4)
+   contains the five required archives and `SHA256SUMS`;
+4. an independent fresh download reported `OK` for every archive in
+   `sha256sum --check SHA256SUMS`; and
+5. the workflow executed the candidate version on Linux, macOS, and Windows,
+   while an independent execution of the published Linux x86-64 binary also
+   reported `5.6.0-rc.4`.
