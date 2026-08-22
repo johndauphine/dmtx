@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/johndauphine/dmtx/internal/config"
+	"github.com/johndauphine/dmtx/internal/secrets"
 )
 
 // defaultConfigFilename is what init writes when the operator names nothing.
@@ -143,19 +144,7 @@ func configPathFor(request Request) string {
 // writeRestricted writes a file and leaves it readable only by its owner,
 // whether or not it already existed.
 func writeRestricted(path, contents string) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if _, err := file.WriteString(contents); err != nil {
-		_ = file.Close()
-		return err
-	}
-	return file.Close()
+	return secrets.WriteProtectedFile(path, []byte(contents))
 }
 
 // starterConfigIsValid reports whether the template dmtx ships actually parses.

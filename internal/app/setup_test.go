@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/johndauphine/dmtx/internal/config"
+	"github.com/johndauphine/dmtx/internal/privatefs"
 )
 
 func TestSetupWritesARestrictedValidatedSQLiteConfiguration(t *testing.T) {
@@ -39,12 +40,8 @@ func TestSetupWritesARestrictedValidatedSQLiteConfiguration(t *testing.T) {
 	if parsed.Source.Type != "sqlite" || parsed.Target.Type != "sqlite" || parsed.Migration.TargetMode != "upsert" {
 		t.Fatalf("unexpected setup configuration: %+v", parsed)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		t.Fatalf("configuration mode = %04o, want owner-only", info.Mode().Perm())
+	if err := privatefs.Validate(path); err != nil {
+		t.Fatalf("configuration is not private: %v", err)
 	}
 }
 

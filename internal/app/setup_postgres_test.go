@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
+	"github.com/johndauphine/dmtx/internal/privatefs"
 )
 
 func TestPostgresSetupUsesProtectedPasswordOrigins(t *testing.T) {
@@ -51,12 +52,8 @@ func TestPostgresSetupUsesProtectedPasswordOrigins(t *testing.T) {
 		t.Fatalf("password origins = %q, %q", parsed.Source.Password, parsed.Target.Password)
 	}
 	secretsDirectory := path + ".secrets"
-	info, err := os.Stat(secretsDirectory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		t.Fatalf("secret directory mode = %04o", info.Mode().Perm())
+	if err := privatefs.Validate(secretsDirectory); err != nil {
+		t.Fatalf("secret directory is not private: %v", err)
 	}
 	for name, want := range map[string]string{"source.password": "source-sentinel-password\n", "target.password": "target-sentinel-password\n"} {
 		secretPath := filepath.Join(secretsDirectory, name)
@@ -67,12 +64,8 @@ func TestPostgresSetupUsesProtectedPasswordOrigins(t *testing.T) {
 		if string(secret) != want {
 			t.Fatalf("%s contents = %q", name, secret)
 		}
-		info, err := os.Stat(secretPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if info.Mode().Perm()&0o077 != 0 {
-			t.Fatalf("%s mode = %04o", name, info.Mode().Perm())
+		if err := privatefs.Validate(secretPath); err != nil {
+			t.Fatalf("%s is not private: %v", name, err)
 		}
 	}
 }

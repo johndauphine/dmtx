@@ -12,6 +12,7 @@ import (
 
 	"github.com/johndauphine/dmtx/internal/migrate"
 	"github.com/johndauphine/dmtx/internal/observability"
+	"github.com/johndauphine/dmtx/internal/privatefs"
 	"github.com/johndauphine/dmtx/internal/state"
 )
 
@@ -237,6 +238,11 @@ func ensurePrivateStage4Directory(path string) error {
 	if err != nil && !os.IsExist(err) {
 		return err
 	}
+	if err == nil {
+		if restrictErr := privatefs.Restrict(path); restrictErr != nil {
+			return fmt.Errorf("restrict %q: %w", path, restrictErr)
+		}
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -244,10 +250,11 @@ func ensurePrivateStage4Directory(path string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("%q is not a real directory", path)
 	}
-	if info.Mode().Perm() != 0o700 {
+	if err := privatefs.Validate(path); err != nil {
 		return fmt.Errorf(
-			"%q permissions must be 0700 (owner-only and owner-accessible)",
+			"%q permissions must be private for the current platform: %w",
 			path,
+			err,
 		)
 	}
 	resolved, err := filepath.EvalSymlinks(path)

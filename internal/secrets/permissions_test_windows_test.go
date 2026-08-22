@@ -10,10 +10,11 @@ import (
 
 func makeTestSecretInsecure(t *testing.T, path string) {
 	t.Helper()
-	current, err := currentWindowsUserSID()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}
+	current := user.User.Sid
 	everyone, err := windows.CreateWellKnownSid(windows.WinWorldSid)
 	if err != nil {
 		t.Fatal(err)
