@@ -62,10 +62,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -80,8 +80,8 @@ jobs:
         # go vet does not report unreachable declarations. This gate exists
         # because an unwired safety check hid that way; see .golangci.yml for
         # why the configuration is deliberately narrow.
-        # v7 is required: the action gained golangci-lint v2 support there.
-        uses: golangci/golangci-lint-action@v7
+        # v9 keeps golangci-lint v2 support on the Node.js 24 action runtime.
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
 
@@ -121,10 +121,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
