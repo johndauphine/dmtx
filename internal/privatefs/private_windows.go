@@ -11,6 +11,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const windowsFileAllAccess = windows.STANDARD_RIGHTS_REQUIRED |
+	windows.SYNCHRONIZE | 0x01ff
+
 func currentUserSID() (*windows.SID, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -96,7 +99,8 @@ func Validate(path string) error {
 			if !current.Equals(entrySID) {
 				return fmt.Errorf("%s grants Windows access to %s", path, entrySID.String())
 			}
-			if ace.Mask&windows.GENERIC_ALL == 0 {
+			if ace.Mask&windows.GENERIC_ALL == 0 &&
+				ace.Mask&windowsFileAllAccess != windowsFileAllAccess {
 				return fmt.Errorf("%s does not grant the current Windows account full control", path)
 			}
 			allowed++
