@@ -8,26 +8,25 @@ names every remaining gap. Earlier stage closeouts remain evidence; Stage 6
 does not reopen their accepted product decisions or weaken their gates.
 
 Stage 6 is complete only when every row marked Required is Covered and the
-closeout records a clean tagged release run plus an upgrade-fixture run. The
-previous closeout is reopened: DMTX's first product release is 1.0, not the
-DMT 5.6.0 compatibility target. A `v1.0.0-rc.1` (or later 1.0 RC) must be
-published and verified before Stage 6 can be accepted again.
+closeout records a clean tagged release run plus an upgrade-fixture run. DMTX's
+first product release is 1.0; DMT 5.6.0 remains the compatibility target. The
+`v1.0.0-rc.1` prerelease satisfies the current release-candidate evidence.
 
 ## Release gates
 
 | Requirement | Status | Current evidence | Remaining work |
 | --- | --- | --- | --- |
-| macOS x86-64 and ARM64, Linux x86-64 and ARM64, and Windows x86-64 binaries | Blocked | The tagged run and published `v5.6.0-rc.4` assets are superseded historical evidence: they used the incorrect DMTX product version. | Publish and verify the five artifacts from `v1.0.0-rc.1` (or a later 1.0 RC). |
-| SHA-256 manifest covering every packaged binary | Blocked | The `v5.6.0-rc.4` checksum evidence is superseded historical evidence only. | Verify a fresh manifest for every `v1.0.0-rc.1` artifact after upload. |
-| Release version reported by `dmtx --version` | Blocked | The historical run injected and reported `5.6.0-rc.4`, which is not DMTX's product version. | Execute `v1.0.0-rc.1` artifacts on Linux, macOS Intel/ARM64, and Windows and confirm `1.0.0-rc.1`. |
-| Clean offline tests, vet, lint, and race detector | Blocked | Verify run `32551315762` is superseded historical evidence for `817b4d3720c138859a841adfd56fc2ac9570a8a1`, not evidence for the intended DMTX 1.0 release commit. | Run the offline tests, vet, lint, race detector, and Linux/Windows builds in Verify for `v1.0.0-rc.1`. |
-| Dependency vulnerability scanning | Blocked | The zero-finding `govulncheck` result in Verify run `32551315762` is superseded historical evidence only. | Run the pinned reachable-dependency scan in Verify for `v1.0.0-rc.1` and record the result. |
-| Armed live database gate | Blocked | The normal and race five-fixture runs in Verify `32551315762` are superseded historical evidence only. | Run the armed live and armed live-race Verify gates for `v1.0.0-rc.1`, with no unexpected skips. |
-| Historical state upgrade support window | Covered | `TestStage6HistoricalStateUpgradeMatrix`, `TestStage6YAMLStateRejectsFutureVersion`, and the application-level ambiguous-resume matrix passed in the exact-candidate offline and live suites, preserving completed history, failing closed on ambiguous evidence, upgrading persistent formats, and refusing future formats. | None. |
-| SemVer and deprecation compatibility | Covered | `public-contract-v5.json`, `TestStage6PublicCompatibilityFixture`, `TestStage6PublicJSONReadersTolerateAdditiveFields`, and `TestStage6DeprecatedFieldsWarnThroughEveryApplicationSurface` passed in exact-candidate Verify and native release jobs. | None. |
-| Cross-platform private-file and atomic-replacement behavior | Blocked | Tagged run `32551007314` and Verify `32551315762` are superseded historical native-platform evidence for the wrongly versioned candidate. | Run the native macOS Intel/ARM64 and Windows suites plus the Linux Verify coverage for `v1.0.0-rc.1`. |
+| macOS x86-64 and ARM64, Linux x86-64 and ARM64, and Windows x86-64 binaries | Covered | The [tagged Release artifacts run](https://github.com/johndauphine/dmtx/actions/runs/32584307354) built and published all five artifacts for `v1.0.0-rc.1` at `02e9a207fdfdbe190e9c7475771ffe7a5e5b467e`. The [published prerelease](https://github.com/johndauphine/dmtx/releases/tag/v1.0.0-rc.1) contains those five archives and `SHA256SUMS`. | None. |
+| SHA-256 manifest covering every packaged binary | Covered | Release run `32584307354` generated and verified `SHA256SUMS` before upload and after artifact re-download. An independent fresh-download audit passed `shasum -a 256 -c SHA256SUMS` for all five archives. | None. |
+| Release version reported by `dmtx --version` | Covered | Release run `32584307354` passed Linux, macOS Intel/ARM64, and Windows version smokes for `1.0.0-rc.1`. The independently downloaded Darwin ARM64 artifact also reported `1.0.0-rc.1`. | None. |
+| Clean offline tests, vet, lint, and race detector | Covered | The [exact-tag Verify dispatch](https://github.com/johndauphine/dmtx/actions/runs/32584626335) passed offline tests, vet, golangci-lint, the offline race detector, and Linux/Windows builds at `02e9a207fdfdbe190e9c7475771ffe7a5e5b467e`. | None. |
+| Dependency vulnerability scanning | Covered | Verify run `32584626335` ran pinned `govulncheck` with zero reachable findings. | None. |
+| Armed live database gate | Covered | Verify run `32584626335` passed the armed five-fixture live suite and armed live race suite. | None. |
+| Historical state upgrade support window | Covered | `TestStage6HistoricalStateUpgradeMatrix`, `TestStage6YAMLStateRejectsFutureVersion`, and the application-level ambiguous-resume matrix passed in the exact-tag offline and live suites, preserving completed history, failing closed on ambiguous evidence, upgrading persistent formats, and refusing future formats. | None. |
+| SemVer and deprecation compatibility | Covered | `public-contract-v5.json`, `TestStage6PublicCompatibilityFixture`, `TestStage6PublicJSONReadersTolerateAdditiveFields`, and `TestStage6DeprecatedFieldsWarnThroughEveryApplicationSurface` passed in exact-tag Verify and native release jobs. | None. |
+| Cross-platform private-file and atomic-replacement behavior | Covered | Release run `32584307354` passed the native file, configuration, application, and API suites on macOS Intel, macOS ARM64, and Windows; Verify run `32584626335` covered Linux. | None. |
 | Operator and recovery documentation | Covered | `OPERATOR_GUIDE.md` covers verified installation, configuration, privileges, operation, observability, stop/resume/recovery, upgrade, rollback limits, security incidents, and supported boundaries. | Keep release-specific supported-version details current. |
-| Requirements-to-tests traceability | Pending | `STAGE6_REQUIREMENTS_TESTS.md` retains named tests, detailed earlier-stage matrices, exact armed commands, and superseded external evidence. | Add the actual DMTX 1.0 Verify and tagged Release evidence after `v1.0.0-rc.1` completes. |
+| Requirements-to-tests traceability | Covered | `STAGE6_REQUIREMENTS_TESTS.md` maps named tests, earlier-stage matrices, exact armed commands, and the completed `v1.0.0-rc.1` Verify and Release evidence. | None. |
 
 ## Section 21 coverage groups
 
@@ -36,7 +35,7 @@ Each must link to named tests or an explicitly armed command before closeout.
 
 | Section | Status | Authoritative evidence or gap |
 | --- | --- | --- |
-| 21.1 Build and public surface | Blocked | Stage 5 parity evidence remains accepted, but the tagged run and `v5.6.0-rc.4` assets are superseded historical evidence because they use the wrong DMTX product version. Rerun the tagged artifact and native version smoke checks for `v1.0.0-rc.1`. |
+| 21.1 Build and public surface | Covered | Stage 5 parity evidence remains accepted. Release run `32584307354` built all five artifacts and passed Linux, macOS Intel/ARM64, and Windows version smokes for `v1.0.0-rc.1`. |
 | 21.2 Configuration and security | Covered | `STAGE6_REQUIREMENTS_TESTS.md` maps defaults, template preservation, redaction, native permission tests, and cgroup v1/v2 memory fixtures. |
 | 21.3 Deterministic DDL and schema | Covered | The traceability index incorporates the all-five-dialect Stage 3/4 planner and live fixture inventories with boundary tests. |
 | 21.4 Driver conformance | Covered | The traceability index incorporates the exact Stage 3 shared/live conformance and version-floor matrix. |
@@ -46,7 +45,7 @@ Each must link to named tests or an explicitly armed command before closeout.
 | 21.8 Strict consistency | Covered | Stage 4 closeout plus the release trace preserve engine limitations, live proofs, and pre-mutation refusals. |
 | 21.9 Schema contract and validation | Covered | Stage 4 closeout plus the release trace preserve schema-evolution, validation, and canonicalization evidence. |
 | 21.10 Operational surfaces | Covered | Stage 5 closeout plus the release trace preserve authentication, redaction, observability, cancellation, and parity gates. |
-| 21.11 Live database matrix and CI | Blocked | Verify `32551315762` and tagged Release `32551007314` are superseded historical evidence for the wrongly versioned candidate; they do not prove the intended DMTX 1.0 release commit. Run Verify, armed live, armed live-race, and tagged Release workflows for `v1.0.0-rc.1`, then record their URLs and results. |
+| 21.11 Live database matrix and CI | Covered | Verify run `32584626335` passed offline, race, static, vulnerability, armed live, and armed live-race gates. Release run `32584307354` passed cross-platform builds, native smokes, pre/post-upload checksums, and prerelease publication. |
 
 ## Superseded external evidence
 
@@ -63,11 +62,20 @@ used to close the 1.0 release gate.
   <https://github.com/johndauphine/dmtx/releases/tag/v5.6.0-rc.4>.
 - Annotated tag `v5.6.0-rc.4` dereferences to the release-candidate commit.
 
-## Required 1.0 release evidence
+## DMTX 1.0 release evidence
 
-Before accepting Stage 6 again, create and publish `v1.0.0-rc.1` from the
-intended release commit, then record its clean Verify and Release workflow
-runs, all five uploaded artifacts, fresh `SHA256SUMS` verification, and native
-`dmtx --version` output of `1.0.0-rc.1` on Linux, macOS Intel/ARM64, and
-Windows. Do not claim that this evidence exists until those external steps are
-complete.
+- Tag `v1.0.0-rc.1` dereferences to main merge commit
+  `02e9a207fdfdbe190e9c7475771ffe7a5e5b467e` (PR #50).
+- [Exact-tag Verify run](https://github.com/johndauphine/dmtx/actions/runs/32584626335)
+  succeeded with offline tests, vet, golangci-lint, zero reachable
+  `govulncheck` findings, offline race, Linux/Windows builds, armed live, and
+  armed live race.
+- [Tagged Release artifacts run](https://github.com/johndauphine/dmtx/actions/runs/32584307354)
+  succeeded with five artifacts, pre-upload and re-downloaded checksum
+  verification, Linux version smoke, macOS Intel/ARM64 and Windows native tests
+  and version smokes, and publication.
+- The [published `v1.0.0-rc.1` prerelease](https://github.com/johndauphine/dmtx/releases/tag/v1.0.0-rc.1)
+  is not a draft, is marked prerelease, and contains exactly five platform
+  archives plus `SHA256SUMS`.
+- An independent fresh-download audit passed `shasum -a 256 -c SHA256SUMS` for
+  all five archives; the downloaded Darwin ARM64 binary reported `1.0.0-rc.1`.
