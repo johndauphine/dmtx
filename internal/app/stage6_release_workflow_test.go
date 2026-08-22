@@ -11,7 +11,9 @@ func TestTaggedReleaseCommandsDoNotDependOnAWorkingTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow := string(data)
+	// Git may check this file out with CRLF endings on Windows. Normalize the
+	// content so this source-level workflow assertion is platform-independent.
+	workflow := strings.ReplaceAll(string(data), "\r\n", "\n")
 	for _, command := range []string{
 		"gh release view \"$GITHUB_REF_NAME\" \\\n" +
 			"              --repo \"$GITHUB_REPOSITORY\"",
