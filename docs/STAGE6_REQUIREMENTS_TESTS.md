@@ -167,10 +167,25 @@ release gate:
    while an independent execution of the published Linux x86-64 binary also
    reported `5.6.0-rc.4`.
 
-## Required DMTX 1.0 release evidence
+## DMTX 1.0 release evidence
 
-The next release candidate is `v1.0.0-rc.1`. Run this repository's Verify and
-tagged Release workflows for that tag, then record the workflow URLs, five
-published artifacts, downloaded `SHA256SUMS` verification, and native
-Linux/macOS/Windows `dmtx --version` output of `1.0.0-rc.1`. Until those steps
-are complete, Stage 6 release closeout remains blocked.
+The `v1.0.0-rc.1` tag dereferences to main merge commit
+`02e9a207fdfdbe190e9c7475771ffe7a5e5b467e` (PR #50).
+
+1. [Exact-tag Verify run `32584626335`](https://github.com/johndauphine/dmtx/actions/runs/32584626335)
+   passed offline tests, vet, golangci-lint, pinned `govulncheck` with zero
+   reachable findings, offline race, Linux/Windows builds, the armed
+   five-fixture live suite, and armed live race;
+2. [Tagged Release artifacts run `32584307354`](https://github.com/johndauphine/dmtx/actions/runs/32584307354)
+   passed all five platform artifacts, SHA256 generation and pre-upload check,
+   Linux version smoke, macOS Intel/ARM64 and Windows native tests and version
+   smokes, uploaded-manifest re-download verification, and publication;
+3. the [published `v1.0.0-rc.1` prerelease](https://github.com/johndauphine/dmtx/releases/tag/v1.0.0-rc.1)
+   is not a draft, is marked prerelease, and contains exactly five platform
+   archives and `SHA256SUMS`; and
+4. an independent fresh-download audit passed `shasum -a 256 -c SHA256SUMS`
+   for all five archives, while the downloaded Darwin ARM64 artifact reported
+   `1.0.0-rc.1`.
+
+At audit time, the remote tag and `origin/main` both resolved to the same
+`02e9a207fdfdbe190e9c7475771ffe7a5e5b467e` commit.
