@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -15,6 +18,102 @@ type Lease struct {
 	RunID      string
 	OwnerToken string
 	Generation int64
+}
+
+const sqliteLeaseFenceSuffix = ".lease-fence"
+
+// openLeaseCoordinator returns a rollback-journal SQLite database used only
+// for cross-process lease fencing. Keeping this lock domain separate from the
+// WAL-backed migration state lets the current owner checkpoint progress while
+// target writes are in flight. Protected operations take compatible shared
+// locks; acquisition and release take an exclusive lock, so a new generation
+// still cannot interleave with either kind of mutation.
+func (store SQLiteStore) openLeaseCoordinator() (*sql.DB, error) {
+	if store.Path == "" {
+		return nil, errors.New("state database path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(store.Path), 0o700); err != nil {
+		return nil, fmt.Errorf("create state directory: %w", err)
+	}
+	database, err := sql.Open("sqlite", store.Path+sqliteLeaseFenceSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("open lease coordinator: %w", err)
+	}
+	fail := func(value error) (*sql.DB, error) {
+		database.Close()
+		return nil, value
+	}
+	if _, err := database.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		return fail(fmt.Errorf("configure lease coordinator timeout: %w", err))
+	}
+	if _, err := database.Exec(`PRAGMA journal_mode = DELETE;`); err != nil {
+		return fail(fmt.Errorf("configure lease coordinator journal: %w", err))
+	}
+	if _, err := database.Exec(`
+		CREATE TABLE IF NOT EXISTS lease_fence (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			nonce INTEGER NOT NULL
+		);
+		INSERT OR IGNORE INTO lease_fence(id, nonce) VALUES (1, 0);
+	`); err != nil {
+		return fail(fmt.Errorf("initialize lease coordinator: %w", err))
+	}
+	return database, nil
+}
+
+// beginLeaseFence pins a coordinator connection until finishLeaseFence.
+// Reading the sentinel under a deferred transaction acquires SQLite's shared
+// rollback-journal lock. BEGIN EXCLUSIVE waits for every such protected
+// operation before a lease generation may change.
+func beginLeaseFence(
+	ctx context.Context,
+	database *sql.DB,
+	exclusive bool,
+) (*sql.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(value error) (*sql.Conn, error) {
+		connection.Close()
+		return nil, value
+	}
+	begin := `BEGIN`
+	if exclusive {
+		begin = `BEGIN EXCLUSIVE`
+	}
+	if _, err := connection.ExecContext(ctx, begin); err != nil {
+		return fail(err)
+	}
+	if !exclusive {
+		var nonce int64
+		if err := connection.QueryRowContext(
+			ctx,
+			`SELECT nonce FROM lease_fence WHERE id = 1`,
+		).Scan(&nonce); err != nil {
+			_, _ = connection.ExecContext(context.Background(), `ROLLBACK`)
+			return fail(err)
+		}
+	}
+	return connection, nil
+}
+
+func finishLeaseFence(connection *sql.Conn, commit bool) error {
+	if connection == nil {
+		return nil
+	}
+	statement := `ROLLBACK`
+	if commit {
+		statement = `COMMIT`
+	}
+	_, transactionErr := connection.ExecContext(
+		context.Background(),
+		statement,
+	)
+	return errors.Join(transactionErr, connection.Close())
 }
 
 // AcquireLease claims a target unless another live owner holds it.
@@ -40,6 +139,21 @@ func (store SQLiteStore) AcquireLeaseMatching(
 	if target == "" || runID == "" {
 		return Lease{}, fmt.Errorf("lease target and run ID are required")
 	}
+	coordinator, err := store.openLeaseCoordinator()
+	if err != nil {
+		return Lease{}, err
+	}
+	defer coordinator.Close()
+	fence, err := beginLeaseFence(context.Background(), coordinator, true)
+	if err != nil {
+		return Lease{}, fmt.Errorf("lock lease acquisition fence: %w", err)
+	}
+	fenceCommitted := false
+	defer func() {
+		if !fenceCommitted {
+			_ = finishLeaseFence(fence, false)
+		}
+	}()
 	database, err := store.Open()
 	if err != nil {
 		return Lease{}, err
@@ -167,11 +281,30 @@ func (store SQLiteStore) AcquireLeaseMatching(
 	if err := tx.Commit(); err != nil {
 		return Lease{}, fmt.Errorf("commit target lease: %w", err)
 	}
+	if err := finishLeaseFence(fence, true); err != nil {
+		return Lease{}, fmt.Errorf("release lease acquisition fence: %w", err)
+	}
+	fenceCommitted = true
 	return Lease{Target: target, RunID: runID, OwnerToken: token, Generation: generation}, nil
 }
 
 // RenewLease extends a lease only while this owner still holds its generation.
 func (store SQLiteStore) RenewLease(lease Lease) error {
+	coordinator, err := store.openLeaseCoordinator()
+	if err != nil {
+		return err
+	}
+	defer coordinator.Close()
+	fence, err := beginLeaseFence(context.Background(), coordinator, false)
+	if err != nil {
+		return fmt.Errorf("lock lease renewal fence: %w", err)
+	}
+	fenceCommitted := false
+	defer func() {
+		if !fenceCommitted {
+			_ = finishLeaseFence(fence, false)
+		}
+	}()
 	database, err := store.Open()
 	if err != nil {
 		return err
@@ -191,11 +324,30 @@ func (store SQLiteStore) RenewLease(lease Lease) error {
 	if updated != 1 {
 		return fmt.Errorf("target lease is no longer owned by this migration")
 	}
+	if err := finishLeaseFence(fence, true); err != nil {
+		return fmt.Errorf("release lease renewal fence: %w", err)
+	}
+	fenceCommitted = true
 	return nil
 }
 
 // ReleaseLease removes a lease only when the owner token and generation match.
 func (store SQLiteStore) ReleaseLease(lease Lease) error {
+	coordinator, err := store.openLeaseCoordinator()
+	if err != nil {
+		return err
+	}
+	defer coordinator.Close()
+	fence, err := beginLeaseFence(context.Background(), coordinator, true)
+	if err != nil {
+		return fmt.Errorf("lock lease release fence: %w", err)
+	}
+	fenceCommitted := false
+	defer func() {
+		if !fenceCommitted {
+			_ = finishLeaseFence(fence, false)
+		}
+	}()
 	database, err := store.Open()
 	if err != nil {
 		return err
@@ -215,6 +367,10 @@ func (store SQLiteStore) ReleaseLease(lease Lease) error {
 	if removed != 1 {
 		return fmt.Errorf("target lease is no longer owned by this migration")
 	}
+	if err := finishLeaseFence(fence, true); err != nil {
+		return fmt.Errorf("release lease release fence: %w", err)
+	}
+	fenceCommitted = true
 	return nil
 }
 

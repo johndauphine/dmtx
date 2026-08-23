@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,6 +38,18 @@ type postgresStage4NetworkBatchWriter interface {
 type postgresStage4NetworkRebuildBatchWriter interface {
 	WriteStage4NetworkRebuildBatch(
 		context.Context,
+		schema.Table,
+		[]string,
+		NetworkWriteMode,
+		[][]any,
+	) (WriteReceipt, error)
+}
+
+type postgresStage4NetworkCanonicalRebuildBatchWriter interface {
+	WriteStage4NetworkCanonicalRebuildBatch(
+		context.Context,
+		string,
+		bool,
 		schema.Table,
 		[]string,
 		NetworkWriteMode,
@@ -137,6 +150,8 @@ func (writer *postgresNativeWriter) WriteBatch(
 		rows,
 		false,
 		"",
+		false,
+		false,
 	)
 }
 
@@ -158,6 +173,8 @@ func (writer *postgresNativeWriter) WriteStage4NetworkBatch(
 		rows,
 		true,
 		"",
+		false,
+		false,
 	)
 }
 
@@ -172,6 +189,52 @@ func (writer *postgresNativeWriter) WriteStage4NetworkRebuildBatch(
 	columns []string,
 	mode NetworkWriteMode,
 	rows [][]any,
+) (WriteReceipt, error) {
+	return writer.writeStage4NetworkRebuildBatch(
+		ctx,
+		table,
+		columns,
+		mode,
+		rows,
+		false,
+		false,
+	)
+}
+
+// WriteStage4NetworkCanonicalRebuildBatch keeps the generic, fully validating
+// writer as its fallback. SQL Server pages may bypass redundant target-side
+// conversion only when every projected PostgreSQL column is one of the value
+// families go-mssqldb emits directly in a pgx COPY-compatible Go shape.
+func (writer *postgresNativeWriter) WriteStage4NetworkCanonicalRebuildBatch(
+	ctx context.Context,
+	sourceEngine string,
+	replayIsolationFenced bool,
+	table schema.Table,
+	columns []string,
+	mode NetworkWriteMode,
+	rows [][]any,
+) (WriteReceipt, error) {
+	canonicalRows := strings.EqualFold(sourceEngine, "mssql") &&
+		postgresSQLServerRowsAreCopyCanonical(table, columns)
+	return writer.writeStage4NetworkRebuildBatch(
+		ctx,
+		table,
+		columns,
+		mode,
+		rows,
+		canonicalRows,
+		replayIsolationFenced,
+	)
+}
+
+func (writer *postgresNativeWriter) writeStage4NetworkRebuildBatch(
+	ctx context.Context,
+	table schema.Table,
+	columns []string,
+	mode NetworkWriteMode,
+	rows [][]any,
+	canonicalRows bool,
+	replayIsolationFenced bool,
 ) (WriteReceipt, error) {
 	attempted := int64(len(rows))
 	notCommitted := WriteReceipt{
@@ -201,7 +264,37 @@ func (writer *postgresNativeWriter) WriteStage4NetworkRebuildBatch(
 		rows,
 		true,
 		mode,
+		canonicalRows,
+		replayIsolationFenced,
 	)
+}
+
+func postgresSQLServerRowsAreCopyCanonical(
+	table schema.Table,
+	columns []string,
+) bool {
+	tableColumns := make(map[string]schema.Column, len(table.Columns))
+	for _, column := range table.Columns {
+		tableColumns[column.Name] = column
+	}
+	for _, name := range columns {
+		column, ok := tableColumns[name]
+		if !ok {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(column.Type)) {
+		case "int", "integer", "int4",
+			"bigint", "int8",
+			"real", "float4", "float", "double", "double precision", "float8",
+			"text", "char", "character", "varchar", "character varying",
+			"blob", "binary", "varbinary", "bytea",
+			"bool", "boolean",
+			"timestamp", "datetime", "timestamptz", "date":
+		default:
+			return false
+		}
+	}
+	return len(columns) > 0
 }
 
 func (writer *postgresNativeWriter) writeBatch(
@@ -212,6 +305,8 @@ func (writer *postgresNativeWriter) writeBatch(
 	rows [][]any,
 	stage4NetworkReplay bool,
 	rebuildMode NetworkWriteMode,
+	canonicalRows bool,
+	replayIsolationFenced bool,
 ) (WriteReceipt, error) {
 	attempted := int64(len(rows))
 	notCommitted := WriteReceipt{
@@ -241,9 +336,13 @@ func (writer *postgresNativeWriter) writeBatch(
 		)
 	}
 
-	normalizedRows, err := normalizePostgresRows(table, columns, rows)
-	if err != nil {
-		return notCommitted, err
+	var err error
+	normalizedRows := rows
+	if !canonicalRows {
+		normalizedRows, err = normalizePostgresRows(table, columns, rows)
+		if err != nil {
+			return notCommitted, err
+		}
 	}
 
 	receipt := notCommitted
@@ -323,7 +422,7 @@ func (writer *postgresNativeWriter) writeBatch(
 				}
 			}()
 
-			if stage4NetworkReplay {
+			if stage4NetworkReplay && !replayIsolationFenced {
 				if isolationErr := fenceAndValidateStage4PostgresNetworkReplay(
 					ctx,
 					transaction,
@@ -424,11 +523,16 @@ func fenceAndValidateStage4PostgresNetworkReplay(
 			),
 		)
 	}
+	// ROW EXCLUSIVE is the lock already implied by COPY, acquired before the
+	// catalog proof so target DDL cannot race that proof. Unlike SHARE UPDATE
+	// EXCLUSIVE it is compatible with sibling page writers, while still
+	// conflicting with the PostgreSQL lock modes used to add constraints,
+	// replace the table, or otherwise change its replay-relevant shape.
 	if _, err := transaction.Exec(
 		ctx,
 		"LOCK TABLE "+
 			postgresQualified(table.Schema, table.Name)+
-			" IN SHARE UPDATE EXCLUSIVE MODE",
+			" IN ROW EXCLUSIVE MODE",
 	); err != nil {
 		return newPostgresSafeOperationError(
 			"acquire PostgreSQL Stage 4 network replay DDL fence for",

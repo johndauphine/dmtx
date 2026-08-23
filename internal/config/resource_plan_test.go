@@ -86,6 +86,33 @@ func TestResolveEffectiveTransferPlanUsesFiniteCgroupV2BudgetAndCapsConcurrency(
 	}
 }
 
+func TestResolveEffectiveTransferPlanDerivesChunkCeilingFromMemory(t *testing.T) {
+	const requestedRows = 30_000
+	plan, err := ResolveEffectiveTransferPlan(
+		context.Background(),
+		Migration{},
+		TransferPlanOptions{
+			LogicalCPUs:        8,
+			RequestedChunkRows: requestedRows,
+		},
+		fakeMemoryProbe{snapshot: MemorySnapshot{
+			HostCapacityBytes:  8 * testGiB,
+			HostAvailableBytes: 4 * testGiB,
+			CgroupV2:           CgroupMemoryEvidence{State: CgroupLimitAbsent},
+			CgroupV1:           CgroupMemoryEvidence{State: CgroupLimitAbsent},
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ChunkRows.Value != requestedRows {
+		t.Fatalf("chunk rows = %d, want memory-admitted %d", plan.ChunkRows.Value, requestedRows)
+	}
+	if plan.ChunkRows.Value <= 10_000 {
+		t.Fatalf("chunk rows retained obsolete 10,000-row ceiling: %#v", plan.ChunkRows)
+	}
+}
+
 func TestResolveEffectiveTransferPlanUsesFiniteProcessLimit(t *testing.T) {
 	const (
 		limit = 512 * testMiB

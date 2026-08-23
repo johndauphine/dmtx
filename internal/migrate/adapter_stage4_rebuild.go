@@ -568,23 +568,14 @@ func runStage4AdapterFreshNetworkRebuildWithoutRecovery(
 	); err != nil {
 		return Result{}, stage4AdapterRebuildRerunError(err)
 	}
-	boundWork := make([]stage4AdapterWork, len(prepared.plans))
-	copiedRows := make([]int, len(prepared.plans))
-	for planIndex := range prepared.plans {
-		tableExecution, err := execution.openTable(ctx, planIndex, false)
-		if err != nil {
-			return Result{}, stage4AdapterRebuildRerunError(err)
-		}
-		copied, err := runStage4AdapterStableNetworkRebuildTableData(
-			ctx,
-			observer,
-			tableExecution,
-		)
-		if err != nil {
-			return Result{}, err
-		}
-		copiedRows[planIndex] = copied
-		boundWork[planIndex] = cloneStage4AdapterNetworkWork(tableExecution.work)
+	copiedRows, boundWork, err := runStage4AdapterParallelNetworkRebuildTables(
+		ctx,
+		observer,
+		execution,
+		stage4AdapterRebuildRerunError,
+	)
+	if err != nil {
+		return Result{}, err
 	}
 	if _, err := protectAdapterTargetMutationOnce(
 		ctx,
@@ -703,32 +694,17 @@ func runStage4AdapterNetworkRebuildDataPlane(
 		preparedTarget = true
 	}
 
-	copiedRows := make([]int, len(prepared.plans))
-	boundWork := make([]stage4AdapterWork, len(prepared.plans))
-	for planIndex := range prepared.plans {
-		tableExecution, err := execution.openTable(ctx, planIndex, false)
-		if err != nil {
-			return Result{}, stage4AdapterRebuildDataPlaneError(
-				execution,
-				err,
-				preparedTarget,
-			)
-		}
-		copied, err := runStage4AdapterStableNetworkRebuildTableData(
-			ctx,
-			mutationObserver,
-			tableExecution,
-		)
-		if err != nil {
-			return Result{}, stage4AdapterRebuildDataPlaneError(
-				execution,
-				err,
-				preparedTarget,
-			)
-		}
-		copiedRows[planIndex] = copied
-		boundWork[planIndex] = cloneStage4AdapterNetworkWork(
-			tableExecution.work,
+	copiedRows, boundWork, err := runStage4AdapterParallelNetworkRebuildTables(
+		ctx,
+		mutationObserver,
+		execution,
+		nil,
+	)
+	if err != nil {
+		return Result{}, stage4AdapterRebuildDataPlaneError(
+			execution,
+			err,
+			preparedTarget,
 		)
 	}
 

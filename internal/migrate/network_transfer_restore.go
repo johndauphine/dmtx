@@ -265,6 +265,14 @@ func (runtime *networkTransferRuntime) readRange(
 		maxRows := runtime.liveChunkRows()
 		memoryRows := runtime.plan.Resources.MemoryBudget.Value /
 			state.plan.MaxRowBytes
+		// Give each configured reader one equal worst-case page allowance when
+		// the budget can cover at least one maximum-width row per reader. This
+		// prevents an outlier row-width proof from letting the first reader
+		// reserve the entire migration budget and silently serialize its peers.
+		readerCount := int64(runtime.plan.Resources.Readers.Value)
+		if readerCount > 1 && memoryRows >= readerCount {
+			memoryRows /= readerCount
+		}
 		if memoryRows < int64(maxRows) {
 			maxRows = int(memoryRows)
 		}
@@ -380,6 +388,17 @@ func (runtime *networkTransferRuntime) readPage(
 	if err != nil {
 		reservation.Release()
 		return nil, err
+	}
+	if err := reservation.ShrinkTo(normalized.RetainedBytes); err != nil {
+		reservation.Release()
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, fmt.Errorf(
+			"%w: shrink source page reservation: %v",
+			ErrInvalidNetworkPage,
+			err,
+		)
 	}
 	issued := NetworkIssuedChunk{
 		RangeIndex:    state.plan.RangeIndex,

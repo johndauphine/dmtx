@@ -222,6 +222,10 @@ type NetworkTransferPlan struct {
 	SourceEngine string
 	TargetEngine string
 	Resources    config.EffectiveTransferPlan
+	// SharedBudget lets independently scheduled table transfers participate in
+	// one migration-wide retained-byte budget. Nil gives a standalone transfer
+	// its own budget, preserving the public one-plan behavior.
+	SharedBudget *ByteBudget
 	RetryPolicy  RetryPolicy
 	ReplayMode   NetworkReplayMode
 	// UpsertMergeRows is an immutable write-only ceiling for an admitted

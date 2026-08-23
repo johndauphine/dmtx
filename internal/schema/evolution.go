@@ -272,7 +272,7 @@ func validateEvolutionCatalogIdentity(table Table) error {
 		!column.PrimaryKey ||
 		column.PrimaryKeyPosition != 1 ||
 		len(orderedPrimaryKeyColumns(table)) != 1 ||
-		canonicalEvolutionGenericType(column.Type) != "bigint" ||
+		!evolutionIdentityIntegerType(column.Type) ||
 		!evolutionTypeEvidenceConsistent(column) {
 		return evolutionPolicy(
 			operation,
@@ -282,6 +282,15 @@ func validateEvolutionCatalogIdentity(table Table) error {
 		)
 	}
 	return nil
+}
+
+func evolutionIdentityIntegerType(value string) bool {
+	switch canonicalEvolutionGenericType(value) {
+	case "integer", "bigint":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateEvolutionCatalogRelations(

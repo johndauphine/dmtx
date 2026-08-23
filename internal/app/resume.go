@@ -65,6 +65,8 @@ func executeResume(ctx context.Context, request Request, reporter *progressRepor
 	if err != nil {
 		return out.failWith(StateError, "state backend: "+err.Error())
 	}
+	store, closeStateBackend := state.WithPersistentSQLiteBackend(store)
+	defer func() { _ = closeStateBackend() }()
 
 	run, found, err := latestRunForTarget(store, cfg.Target)
 	if err != nil {

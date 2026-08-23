@@ -47,6 +47,32 @@ type adapterStage4NetworkRebuildTarget interface {
 	) (WriteReceipt, error)
 }
 
+// adapterStage4NetworkCanonicalRebuildTarget is an optional route-aware fast
+// path. The ordinary rebuild interface remains the compatibility and fallback
+// contract; implementations may bypass target-side conversion only when the
+// source engine and projected target schema prove that the page is already in
+// the target driver's canonical value shapes.
+type adapterStage4NetworkCanonicalRebuildTarget interface {
+	WriteStage4NetworkCanonicalRebuildBatch(
+		context.Context,
+		string,
+		schema.Table,
+		[]string,
+		NetworkWriteMode,
+		[][]any,
+	) (WriteReceipt, error)
+}
+
+// adapterStage4NetworkRebuildSetFencer holds one target-owned DDL fence across
+// the complete parallel rebuild data plane. Targets without this optional
+// capability retain their per-page replay-isolation proof.
+type adapterStage4NetworkRebuildSetFencer interface {
+	BeginStage4NetworkRebuildSetFence(
+		context.Context,
+		[]schema.Table,
+	) (func() error, error)
+}
+
 func (*postgresTargetAdapter) stage4NetworkIdempotentUpsertTarget() {}
 func (*mysqlTargetAdapter) stage4NetworkIdempotentUpsertTarget()    {}
 func (*sqlServerTargetAdapter) stage4NetworkIdempotentUpsertTarget() {
@@ -122,10 +148,9 @@ type stage4AdapterNetworkExecution struct {
 	// lease-fenced SQLite history capability; YAML/current-run state remains
 	// intentionally history-free.
 	runtimeTuningHistory map[int]*stage4AdapterRuntimeTuningHistorySession
-
-	nextGlobalRange   uint64
-	finalizeWork      func(stage4AdapterWork) (stage4AdapterWork, error)
-	deleteTransferred map[int]stage4AdapterPostgresDeleteTransferredTable
+	nextGlobalRange      uint64
+	finalizeWork         func(stage4AdapterWork) (stage4AdapterWork, error)
+	deleteTransferred    map[int]stage4AdapterPostgresDeleteTransferredTable
 
 	// aggregate is non-nil only once this run owns a durable Stage 4 table
 	// inventory, which is the proof that every table must publish its terminal
@@ -452,7 +477,14 @@ func admitStage4AdapterNetworkTransfer(
 				),
 			)
 		}
-		return &stage4AdapterNetworkExecution{
+		if prepared.mode == "drop_recreate" {
+			configureStage4AdapterRebuildSourcePool(
+				source,
+				resources,
+				len(prepared.plans),
+			)
+		}
+		execution := &stage4AdapterNetworkExecution{
 			deferred:              true,
 			source:                source,
 			target:                networkTarget,
@@ -466,7 +498,8 @@ func admitStage4AdapterNetworkTransfer(
 			checkpointFrequency:   checkpointFrequency,
 			runtimeTuning:         cfg.Migration.RuntimeTuning,
 			runtimeTuningInterval: cfg.Migration.RuntimeTuningInterval,
-		}, nil
+		}
+		return execution, nil
 	}
 	if largeTableThreshold != 0 {
 		return nil, NewTransferError(

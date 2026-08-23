@@ -115,6 +115,53 @@ func TestByteBudgetCancellationReleasesAndUnblocks(t *testing.T) {
 	}
 }
 
+func TestByteReservationShrinkReleasesOnlyUnusedCapacity(t *testing.T) {
+	budget, err := NewByteBudget(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := budget.Acquire(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	acquired := make(chan *ByteReservation, 1)
+	go func() {
+		reservation, acquireErr := budget.Acquire(context.Background(), 6)
+		if acquireErr == nil {
+			acquired <- reservation
+		}
+	}()
+	select {
+	case waiter := <-acquired:
+		waiter.Release()
+		t.Fatal("waiter acquired before the conservative reservation shrank")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := owner.ShrinkTo(4); err != nil {
+		t.Fatal(err)
+	}
+	var waiter *ByteReservation
+	select {
+	case waiter = <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("shrink did not release unused capacity")
+	}
+	if owner.Bytes() != 4 ||
+		budget.Stats() != (ByteBudgetStats{Limit: 10, Current: 10, Peak: 10}) {
+		t.Fatalf("unexpected shrunken reservation: bytes=%d stats=%+v", owner.Bytes(), budget.Stats())
+	}
+	if err := owner.ShrinkTo(5); !errors.Is(err, ErrInvalidByteRequest) {
+		t.Fatalf("growing shrink error = %v", err)
+	}
+	owner.Release()
+	waiter.Release()
+	if got := budget.Stats(); got.Current != 0 || got.Peak != 10 {
+		t.Fatalf("unexpected final stats: %+v", got)
+	}
+}
+
 func TestByteBudgetWaitingCancellationAcquiresNothing(t *testing.T) {
 	budget, err := NewByteBudget(1)
 	if err != nil {

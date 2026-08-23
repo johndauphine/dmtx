@@ -294,6 +294,7 @@ func (execution *stage4AdapterNetworkExecution) callbacks(
 					execution.target,
 					execution.ranges,
 					execution.plan.ReplayMode,
+					execution.plan.SourceEngine,
 					request,
 				)
 				observeFallbackEvents(observer, execution.target)
@@ -806,9 +807,24 @@ func (execution *stage4AdapterNetworkExecution) planTable(
 			),
 		)
 	}
+	stable, readerLimit, err := composeSQLServerStableReaderPool(
+		ctx,
+		execution.source,
+		plan.source,
+		plan.columns,
+		partitions,
+		bound[0].pagination,
+		evidence,
+		session,
+		stable,
+		execution.resources.Readers.Value,
+	)
+	if err != nil {
+		return nil, err
+	}
 	resources, err := clampStage4AdapterNetworkReaders(
 		execution.resources,
-		session.ReaderLimit(),
+		readerLimit,
 	)
 	if err != nil {
 		return nil, err

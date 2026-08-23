@@ -3,16 +3,107 @@ package migrate
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/schema"
 	_ "modernc.org/sqlite"
 )
+
+func TestAdapterNetworkRangePageFingerprintPreservesV1Encoding(t *testing.T) {
+	t.Parallel()
+
+	timestamp := time.Date(2010, time.July, 14, 12, 34, 56, 789, time.UTC)
+	admission := adapterRangePageAdmission{
+		columnNames: []string{"id", "payload", "score", "active", "created"},
+		pagination:  PaginationPlan{TopologyHash: "plan-topology"},
+		request: NetworkReadRequest{
+			Range: NetworkRangePlan{
+				RangeIndex:   7,
+				TopologyHash: "range-topology",
+			},
+			Sequence:      11,
+			StartFrontier: []byte("start"),
+		},
+	}
+	page := NetworkReadPage{
+		Rows: [][]any{
+			{int64(42), "hello", float64(1.25), true, timestamp},
+			{int32(-7), []byte{0, 1, 2}, float32(-2.5), false, nil},
+		},
+		EndFrontier: []byte("end"),
+		Exhausted:   true,
+	}
+
+	got, err := fingerprintAdapterNetworkRangePage(admission, page)
+	if err != nil {
+		t.Fatalf("fingerprint page: %v", err)
+	}
+
+	var canonical bytes.Buffer
+	writeBytes := func(value []byte) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		canonical.Write(length[:])
+		canonical.Write(value)
+	}
+	writeUint64 := func(value uint64) {
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], value)
+		canonical.Write(encoded[:])
+	}
+	writeInt64 := func(value int64) { writeUint64(uint64(value)) }
+
+	writeBytes([]byte("dmtx-network-range-page-v1"))
+	writeBytes([]byte("plan-topology"))
+	writeBytes([]byte("range-topology"))
+	writeUint64(7)
+	writeUint64(11)
+	writeBytes([]byte("start"))
+	writeBytes([]byte("end"))
+	canonical.WriteByte(1)
+	writeUint64(5)
+	for _, column := range admission.columnNames {
+		writeBytes([]byte(column))
+	}
+	writeUint64(2)
+	canonical.WriteByte(3)
+	writeInt64(42)
+	canonical.WriteByte(2)
+	writeBytes([]byte("hello"))
+	canonical.WriteByte(4)
+	writeUint64(math.Float64bits(1.25))
+	canonical.Write([]byte{5, 1})
+	canonical.WriteByte(6)
+	encodedTime, err := timestamp.MarshalBinary()
+	if err != nil {
+		t.Fatalf("encode timestamp: %v", err)
+	}
+	writeBytes(encodedTime)
+	canonical.WriteByte(3)
+	writeInt64(-7)
+	canonical.WriteByte(1)
+	writeBytes([]byte{0, 1, 2})
+	canonical.WriteByte(4)
+	writeUint64(math.Float64bits(-2.5))
+	canonical.Write([]byte{5, 0})
+	canonical.WriteByte(0)
+
+	wantDigest := sha256.Sum256(canonical.Bytes())
+	want := hex.EncodeToString(wantDigest[:])
+	if got != want {
+		t.Fatalf("fingerprint = %s, want legacy v1 digest %s", got, want)
+	}
+}
 
 func TestAdapterNetworkRangePageQueryUsesExactEngineSemantics(
 	t *testing.T,
@@ -467,6 +558,56 @@ func TestSQLiteNetworkRangePageFeedsResumableCoreAndReplays(
 		"SELECT 1",
 	); err != nil {
 		t.Fatalf("source snapshot remained cursor-blocked: %v", err)
+	}
+}
+
+func TestAdapterNetworkRangePageCompactsShortPageBacking(t *testing.T) {
+	t.Parallel()
+
+	source, table := openAdapterRangePageSQLiteFixture(t)
+	plan := adapterRangePageTuplePlan(3, 1)
+	plannedRange := plan.Ranges[0]
+	request := adapterRangePageRequest(table, plan, 0, 3)
+	first, err := source.ReadNetworkRangePage(
+		context.Background(),
+		table,
+		[]string{"tenant", "id", "payload"},
+		plan,
+		plannedRange,
+		request,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Rows) != 3 {
+		t.Fatalf("first page rows = %d, want 3", len(first.Rows))
+	}
+
+	request.Sequence = 1
+	request.StartFrontier = first.EndFrontier
+	last, err := source.ReadNetworkRangePage(
+		context.Background(),
+		table,
+		[]string{"tenant", "id", "payload"},
+		plan,
+		plannedRange,
+		request,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(last.Rows) != 1 || cap(last.Rows) != 1 ||
+		len(last.RowBytes) != 1 || cap(last.RowBytes) != 1 ||
+		len(last.Rows[0]) != 3 || cap(last.Rows[0]) != 3 {
+		t.Fatalf(
+			"short page backing was not compacted: rows=%d/%d row_bytes=%d/%d row=%d/%d",
+			len(last.Rows),
+			cap(last.Rows),
+			len(last.RowBytes),
+			cap(last.RowBytes),
+			len(last.Rows[0]),
+			cap(last.Rows[0]),
+		)
 	}
 }
 

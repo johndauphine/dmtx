@@ -319,6 +319,26 @@ func TestSQLServerSourceRowsRejectInvalidTemporalDriverValues(t *testing.T) {
 			wantReason: "invalid datetime",
 		},
 		{
+			name: "datetime2 seven digit value exceeds PostgreSQL precision",
+			column: sqlServerTemporalFixtureColumn(
+				"value",
+				"datetime",
+				"timestamp",
+				6,
+			),
+			value: time.Date(
+				2026,
+				time.July,
+				30,
+				12,
+				34,
+				56,
+				123456700,
+				time.UTC,
+			),
+			wantReason: "invalid datetime",
+		},
+		{
 			name: "smalldatetime has seconds",
 			column: sqlServerTemporalFixtureColumn(
 				"value",

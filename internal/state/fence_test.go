@@ -1,11 +1,155 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestLeaseGuardProtectConcurrentOverlapsStateWritesAndBlocksTakeover(
+	t *testing.T,
+) {
+	t.Parallel()
+	store := SQLiteStore{Path: filepath.Join(t.TempDir(), "leases.db")}
+	lease, err := store.AcquireLease("postgres:target", "run-1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(
+		`UPDATE leases SET heartbeat_at = ? WHERE target = ?`,
+		time.Unix(0, 0).UTC(),
+		lease.Target,
+	); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	guard := NewLeaseGuard(store, lease)
+	entered := make(chan int, 2)
+	release := make(chan struct{})
+	done := make(chan error, 2)
+	for index := 0; index < 2; index++ {
+		index := index
+		go func() {
+			done <- guard.ProtectConcurrent(context.Background(), func() error {
+				entered <- index
+				<-release
+				return nil
+			})
+		}()
+	}
+	for index := 0; index < 2; index++ {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("target writes did not overlap beneath one lease fence")
+		}
+	}
+	stateMutation := make(chan error, 1)
+	go func() {
+		stateMutation <- guard.Protect(context.Background(), func() error {
+			return nil
+		})
+	}()
+	select {
+	case mutationErr := <-stateMutation:
+		if mutationErr != nil {
+			t.Fatalf("state mutation beside active target cohort: %v", mutationErr)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("state mutation waited for an independent target write")
+	}
+
+	takeover := make(chan error, 1)
+	go func() {
+		_, acquireErr := store.AcquireLease(lease.Target, "run-2", time.Second)
+		takeover <- acquireErr
+	}()
+	select {
+	case acquireErr := <-takeover:
+		if acquireErr == nil {
+			t.Fatal("takeover interleaved with concurrent protected target writes")
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	for index := 0; index < 2; index++ {
+		if err := <-done; err != nil {
+			t.Fatalf("protected target write %d: %v", index, err)
+		}
+	}
+	select {
+	case acquireErr := <-takeover:
+		if acquireErr != nil {
+			t.Fatalf("takeover after protected target cohort: %v", acquireErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("takeover remained blocked after protected target cohort")
+	}
+}
+
+func TestLeaseGuardProtectConcurrentDoesNotBarrierCompletedWriters(
+	t *testing.T,
+) {
+	t.Parallel()
+	store := SQLiteStore{Path: filepath.Join(t.TempDir(), "leases.db")}
+	lease, err := store.AcquireLease("postgres:target", "run-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := NewLeaseGuard(store, lease)
+
+	firstEntered := make(chan struct{})
+	secondEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondRelease := make(chan struct{})
+	firstDone := make(chan error, 1)
+	secondDone := make(chan error, 1)
+	go func() {
+		firstDone <- guard.ProtectConcurrent(context.Background(), func() error {
+			close(firstEntered)
+			<-firstRelease
+			return nil
+		})
+	}()
+	<-firstEntered
+	go func() {
+		secondDone <- guard.ProtectConcurrent(context.Background(), func() error {
+			close(secondEntered)
+			<-secondRelease
+			return nil
+		})
+	}()
+	<-secondEntered
+
+	close(firstRelease)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first protected write: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("completed writer waited for an overlapping writer to finish")
+	}
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second protected write returned before release: %v", err)
+	default:
+	}
+	close(secondRelease)
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second protected write: %v", err)
+	}
+}
 
 func TestFenceBackendAdvertisesOptionalStage4CapabilitiesOnlyWhenUnderlyingSupportsThem(
 	t *testing.T,

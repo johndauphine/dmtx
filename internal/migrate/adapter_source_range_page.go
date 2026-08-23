@@ -1389,9 +1389,26 @@ func scanAdapterNetworkRangePage(
 	rows adapterRows,
 	admission adapterRangePageAdmission,
 ) (NetworkReadPage, KeyTuple, error) {
+	columnCount := len(admission.columnNames)
+	if columnCount < 1 ||
+		admission.request.MaxRows > math.MaxInt/columnCount {
+		return NetworkReadPage{}, nil, adapterRangePagePolicy(
+			errors.New("source network page shape exceeds process limits"),
+		)
+	}
 	page := NetworkReadPage{
 		Rows:     make([][]any, 0, admission.request.MaxRows),
 		RowBytes: make([]int64, 0, admission.request.MaxRows),
+	}
+	// One page-owned backing array replaces three allocations per row while
+	// preserving independent row slices. database/sql's conversion into *any
+	// already clones driver-owned []byte payloads, so the scanned values are
+	// safe to retain after the cursor advances.
+	valuesBacking := make([]any, admission.request.MaxRows*columnCount)
+	destinations := make([]any, columnCount)
+	retainedRowBase, err := adapterRetainedRowBaseBytes(columnCount)
+	if err != nil {
+		return NetworkReadPage{}, nil, adapterRangePagePolicy(err)
 	}
 	var previous KeyTuple
 	if admission.hasEffective && !admission.rowNumber {
@@ -1405,9 +1422,25 @@ func scanAdapterNetworkRangePage(
 			return NetworkReadPage{}, nil, adapterRangePagePolicy(err)
 		}
 	}
+	// Integer primary keys are the common bulk-transfer path. Keep their
+	// per-row order proof in native int64 form and encode a typed frontier only
+	// once at the page boundary. Constructing a KeyTuple and decimal string,
+	// then parsing that string again for every source row, was pure overhead.
+	fastIntegerKey := !admission.rowNumber &&
+		len(admission.keys) == 1 &&
+		admission.keys[0].Kind == KeyInteger &&
+		len(admission.keyIndexes) == 1 &&
+		len(admission.upper) == 1
+	var previousInteger int64
+	previousIntegerSet := false
+	if fastIntegerKey && admission.hasEffective &&
+		len(admission.effective) == 1 {
+		previousInteger = admission.effective[0]
+		previousIntegerSet = true
+	}
 	for len(page.Rows) < admission.request.MaxRows && rows.Next() {
-		values := make([]any, len(admission.columnNames))
-		destinations := make([]any, len(values))
+		start := len(page.Rows) * columnCount
+		values := valuesBacking[start : start+columnCount]
 		for index := range values {
 			destinations[index] = &values[index]
 		}
@@ -1421,40 +1454,77 @@ func scanAdapterNetworkRangePage(
 				),
 			)
 		}
-		owned := cloneAdapterRow(values)
+		owned := values
 		if !admission.rowNumber {
-			frontier, err := adapterRangePageRowKeyFrontier(
-				owned,
-				admission,
-			)
-			if err != nil {
-				return NetworkReadPage{}, nil, err
-			}
-			if previous != nil &&
-				adapterRangePageKeyTupleCompare(frontier, previous) <= 0 {
-				return NetworkReadPage{}, nil, NewTransferError(
-					ErrorClassState,
-					fmt.Errorf(
-						"source network range order did not advance for table %s",
-						admission.table.Name,
-					),
+			if fastIntegerKey {
+				columnIndex := admission.keyIndexes[0]
+				frontier, ok := adapterRangePageInt64(owned[columnIndex])
+				if !ok {
+					return NetworkReadPage{}, nil, NewTransferError(
+						ErrorClassConversion,
+						fmt.Errorf(
+							"source pagination key %s has an unexpected driver value shape",
+							admission.keys[0].Name,
+						),
+					)
+				}
+				if previousIntegerSet && frontier <= previousInteger {
+					return NetworkReadPage{}, nil, NewTransferError(
+						ErrorClassState,
+						fmt.Errorf(
+							"source network range order did not advance for table %s",
+							admission.table.Name,
+						),
+					)
+				}
+				if frontier > admission.upper[0] {
+					return NetworkReadPage{}, nil, NewTransferError(
+						ErrorClassState,
+						fmt.Errorf(
+							"source network range exceeded its immutable upper bound for table %s",
+							admission.table.Name,
+						),
+					)
+				}
+				previousInteger = frontier
+				previousIntegerSet = true
+			} else {
+				frontier, err := adapterRangePageRowKeyFrontier(
+					owned,
+					admission,
 				)
+				if err != nil {
+					return NetworkReadPage{}, nil, err
+				}
+				if previous != nil &&
+					adapterRangePageKeyTupleCompare(frontier, previous) <= 0 {
+					return NetworkReadPage{}, nil, NewTransferError(
+						ErrorClassState,
+						fmt.Errorf(
+							"source network range order did not advance for table %s",
+							admission.table.Name,
+						),
+					)
+				}
+				if adapterRangePageKeyTupleCompare(
+					frontier,
+					admission.keyUpper,
+				) > 0 {
+					return NetworkReadPage{}, nil, NewTransferError(
+						ErrorClassState,
+						fmt.Errorf(
+							"source network range exceeded its immutable upper bound for table %s",
+							admission.table.Name,
+						),
+					)
+				}
+				previous = frontier
 			}
-			if adapterRangePageKeyTupleCompare(
-				frontier,
-				admission.keyUpper,
-			) > 0 {
-				return NetworkReadPage{}, nil, NewTransferError(
-					ErrorClassState,
-					fmt.Errorf(
-						"source network range exceeded its immutable upper bound for table %s",
-						admission.table.Name,
-					),
-				)
-			}
-			previous = frontier
 		}
-		retained, err := measureAdapterRetainedRowBytes(owned)
+		retained, err := measureAdapterRetainedRowBytesFromBase(
+			owned,
+			retainedRowBase,
+		)
 		if err != nil {
 			return NetworkReadPage{}, nil, NewTransferError(
 				ErrorClassConversion,
@@ -1487,11 +1557,40 @@ func scanAdapterNetworkRangePage(
 			err,
 		)
 	}
+	// A short terminal page must not retain the unused tail of the maximum-page
+	// backing arrays after the runtime releases the corresponding reservation.
+	// Compact all three inventories before returning so RetainedBytes continues
+	// to describe the complete page-owned working set, not just its live prefix.
+	if len(page.Rows) < admission.request.MaxRows {
+		rowCount := len(page.Rows)
+		if rowCount == 0 {
+			page.Rows = nil
+			page.RowBytes = nil
+		} else {
+			compactedValues := make([]any, rowCount*columnCount)
+			copy(compactedValues, valuesBacking[:len(compactedValues)])
+			compactedRows := make([][]any, rowCount)
+			for index := range compactedRows {
+				start := index * columnCount
+				compactedRows[index] = compactedValues[start : start+columnCount : start+columnCount]
+			}
+			page.Rows = compactedRows
+			page.RowBytes = append([]int64(nil), page.RowBytes...)
+		}
+	}
 	if len(page.Rows) == 0 {
 		return page, nil, nil
 	}
+	if fastIntegerKey {
+		if !previousIntegerSet {
+			return NetworkReadPage{}, nil, NewTransferError(
+				ErrorClassState,
+				errors.New("integer source page has no terminal frontier"),
+			)
+		}
+		previous = KeyTuple{IntegerKey(previousInteger)}
+	}
 	var frontier []byte
-	var err error
 	if admission.rowNumber {
 		expected := admission.lastRow - admission.effectiveRow
 		if expected > int64(admission.request.MaxRows) {
@@ -1692,86 +1791,165 @@ func fingerprintAdapterNetworkRangePage(
 	admission adapterRangePageAdmission,
 	page NetworkReadPage,
 ) (string, error) {
-	digest := sha256.New()
+	// Scalar-heavy tables issue several small canonical fields per cell. Keep a
+	// concrete fixed buffer in front of SHA-256 so the hot loop avoids an
+	// interface dispatch and temporary allocation for every write while
+	// preserving the exact v1 byte stream used by existing durable resumes.
+	canonical := newAdapterRangePageCanonicalHash()
 	adapterRangePageHashBytes(
-		digest,
+		canonical,
 		[]byte("dmtx-network-range-page-v1"),
 	)
 	adapterRangePageHashBytes(
-		digest,
+		canonical,
 		[]byte(admission.pagination.TopologyHash),
 	)
 	adapterRangePageHashBytes(
-		digest,
+		canonical,
 		[]byte(admission.request.Range.TopologyHash),
 	)
 	adapterRangePageHashUint64(
-		digest,
+		canonical,
 		admission.request.Range.RangeIndex,
 	)
-	adapterRangePageHashUint64(digest, admission.request.Sequence)
-	adapterRangePageHashBytes(digest, admission.request.StartFrontier)
-	adapterRangePageHashBytes(digest, page.EndFrontier)
+	adapterRangePageHashUint64(canonical, admission.request.Sequence)
+	adapterRangePageHashBytes(canonical, admission.request.StartFrontier)
+	adapterRangePageHashBytes(canonical, page.EndFrontier)
 	if page.Exhausted {
-		digest.Write([]byte{1})
+		canonical.writeByte(1)
 	} else {
-		digest.Write([]byte{0})
+		canonical.writeByte(0)
 	}
-	adapterRangePageHashUint64(digest, uint64(len(admission.columnNames)))
+	adapterRangePageHashUint64(canonical, uint64(len(admission.columnNames)))
 	for _, column := range admission.columnNames {
-		adapterRangePageHashBytes(digest, []byte(column))
+		adapterRangePageHashBytes(canonical, []byte(column))
 	}
-	adapterRangePageHashUint64(digest, uint64(len(page.Rows)))
+	adapterRangePageHashUint64(canonical, uint64(len(page.Rows)))
 	for _, row := range page.Rows {
 		if len(row) != len(admission.columnNames) {
 			return "", errors.New("source row width differs from selected columns")
 		}
 		for _, value := range row {
-			if err := adapterRangePageHashValue(digest, value); err != nil {
+			if err := adapterRangePageHashValue(canonical, value); err != nil {
 				return "", err
 			}
 		}
 	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return canonical.sum(), nil
 }
 
-func adapterRangePageHashValue(digest hash.Hash, value any) error {
+const adapterRangePageCanonicalBufferBytes = 64 * 1024
+
+type adapterRangePageCanonicalHash struct {
+	digest hash.Hash
+	buffer []byte
+	used   int
+}
+
+func newAdapterRangePageCanonicalHash() *adapterRangePageCanonicalHash {
+	return &adapterRangePageCanonicalHash{
+		digest: sha256.New(),
+		buffer: make([]byte, adapterRangePageCanonicalBufferBytes),
+	}
+}
+
+func (canonical *adapterRangePageCanonicalHash) flush() {
+	if canonical.used == 0 {
+		return
+	}
+	_, _ = canonical.digest.Write(canonical.buffer[:canonical.used])
+	canonical.used = 0
+}
+
+func (canonical *adapterRangePageCanonicalHash) writeByte(value byte) {
+	if canonical.used == len(canonical.buffer) {
+		canonical.flush()
+	}
+	canonical.buffer[canonical.used] = value
+	canonical.used++
+}
+
+func (canonical *adapterRangePageCanonicalHash) writeBytes(value []byte) {
+	for len(value) > 0 {
+		if canonical.used == len(canonical.buffer) {
+			canonical.flush()
+		}
+		copied := copy(canonical.buffer[canonical.used:], value)
+		canonical.used += copied
+		value = value[copied:]
+	}
+}
+
+func (canonical *adapterRangePageCanonicalHash) writeString(value string) {
+	for len(value) > 0 {
+		if canonical.used == len(canonical.buffer) {
+			canonical.flush()
+		}
+		copied := copy(canonical.buffer[canonical.used:], value)
+		canonical.used += copied
+		value = value[copied:]
+	}
+}
+
+func (canonical *adapterRangePageCanonicalHash) writeUint64(value uint64) {
+	if len(canonical.buffer)-canonical.used < 8 {
+		canonical.flush()
+	}
+	binary.BigEndian.PutUint64(
+		canonical.buffer[canonical.used:canonical.used+8],
+		value,
+	)
+	canonical.used += 8
+}
+
+func (canonical *adapterRangePageCanonicalHash) sum() string {
+	canonical.flush()
+	return hex.EncodeToString(canonical.digest.Sum(nil))
+}
+
+func adapterRangePageHashValue(
+	digest *adapterRangePageCanonicalHash,
+	value any,
+) error {
 	switch typed := value.(type) {
 	case nil:
-		digest.Write([]byte{0})
+		digest.writeByte(0)
 	case []byte:
-		digest.Write([]byte{1})
+		digest.writeByte(1)
 		adapterRangePageHashBytes(digest, typed)
 	case string:
-		digest.Write([]byte{2})
-		adapterRangePageHashBytes(digest, []byte(typed))
+		digest.writeByte(2)
+		adapterRangePageHashString(digest, typed)
 	case int64:
-		digest.Write([]byte{3})
+		digest.writeByte(3)
 		adapterRangePageHashInt64(digest, typed)
 	case int32:
-		digest.Write([]byte{3})
+		digest.writeByte(3)
 		adapterRangePageHashInt64(digest, int64(typed))
 	case int:
-		digest.Write([]byte{3})
+		digest.writeByte(3)
 		adapterRangePageHashInt64(digest, int64(typed))
 	case float64:
-		digest.Write([]byte{4})
+		digest.writeByte(4)
 		adapterRangePageHashUint64(digest, math.Float64bits(typed))
 	case float32:
-		digest.Write([]byte{4})
+		digest.writeByte(4)
 		adapterRangePageHashUint64(
 			digest,
 			math.Float64bits(float64(typed)),
 		)
 	case bool:
 		if typed {
-			digest.Write([]byte{5, 1})
+			digest.writeByte(5)
+			digest.writeByte(1)
 		} else {
-			digest.Write([]byte{5, 0})
+			digest.writeByte(5)
+			digest.writeByte(0)
 		}
 	case time.Time:
-		digest.Write([]byte{6})
-		encoded, err := typed.MarshalBinary()
+		digest.writeByte(6)
+		var storage [32]byte
+		encoded, err := typed.AppendBinary(storage[:0])
 		if err != nil {
 			return errors.New("source time value has no canonical encoding")
 		}
@@ -1785,19 +1963,34 @@ func adapterRangePageHashValue(digest hash.Hash, value any) error {
 	return nil
 }
 
-func adapterRangePageHashBytes(digest hash.Hash, value []byte) {
+func adapterRangePageHashBytes(
+	digest *adapterRangePageCanonicalHash,
+	value []byte,
+) {
 	adapterRangePageHashUint64(digest, uint64(len(value)))
-	_, _ = digest.Write(value)
+	digest.writeBytes(value)
 }
 
-func adapterRangePageHashInt64(digest hash.Hash, value int64) {
+func adapterRangePageHashString(
+	digest *adapterRangePageCanonicalHash,
+	value string,
+) {
+	adapterRangePageHashUint64(digest, uint64(len(value)))
+	digest.writeString(value)
+}
+
+func adapterRangePageHashInt64(
+	digest *adapterRangePageCanonicalHash,
+	value int64,
+) {
 	adapterRangePageHashUint64(digest, uint64(value))
 }
 
-func adapterRangePageHashUint64(digest hash.Hash, value uint64) {
-	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], value)
-	_, _ = digest.Write(encoded[:])
+func adapterRangePageHashUint64(
+	digest *adapterRangePageCanonicalHash,
+	value uint64,
+) {
+	digest.writeUint64(value)
 }
 
 func verifyAdapterNetworkRangeReplay(

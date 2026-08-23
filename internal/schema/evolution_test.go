@@ -895,9 +895,9 @@ func TestCompleteEvolutionCatalogRejectsIncompleteRelationEvidence(
 			},
 		},
 		{
-			name: "identity has non-bigint type",
+			name: "identity has non-integer type",
 			mutate: func(tables []Table) []Table {
-				tables[0].Columns[0].Type = "integer"
+				tables[0].Columns[0].Type = "text"
 				tables[0].Identity = &Identity{
 					Column:     "id",
 					Generation: IdentityByDefault,

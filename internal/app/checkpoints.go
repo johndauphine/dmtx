@@ -405,7 +405,7 @@ func (observer tableCheckpointObserver) ProtectTargetMutation(ctx context.Contex
 	if observer.guard == nil {
 		return operation()
 	}
-	return observer.guard.Protect(ctx, operation)
+	return observer.guard.ProtectConcurrent(ctx, operation)
 }
 
 func stateCheckpointError(action string, err error) error {

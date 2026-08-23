@@ -267,6 +267,24 @@ func TestSQLServerSourceColumnFromCatalogPreservesModifiers(t *testing.T) {
 			},
 		},
 		{
+			name: "datetime2 seven digits requires microsecond values",
+			catalog: sqlServerSourceTestColumn(
+				"occurred_at",
+				"datetime2",
+				8,
+				27,
+				7,
+			),
+			want: schema.Column{
+				Name: "occurred_at",
+				Type: "datetime",
+				DeclaredType: &schema.DeclaredType{
+					Base:      "timestamp",
+					Arguments: []int{6},
+				},
+			},
+		},
+		{
 			name: "smalldatetime exact minute",
 			catalog: sqlServerSourceTestColumn(
 				"minute_at",
@@ -358,11 +376,11 @@ func TestSQLServerSourceColumnFromCatalogRejectsUnsafeShapes(t *testing.T) {
 			value.precision = 25
 			value.scale = 6
 		},
-		"datetime2 nanoseconds": func(value *sqlServerSourceColumnCatalog) {
+		"datetime2 scale above SQL Server maximum": func(value *sqlServerSourceColumnCatalog) {
 			value.typeName = "datetime2"
 			value.maxLength = 8
-			value.precision = 27
-			value.scale = 7
+			value.precision = 28
+			value.scale = 8
 		},
 		"datetimeoffset loses source offset": func(
 			value *sqlServerSourceColumnCatalog,
@@ -435,7 +453,82 @@ func TestSQLServerSourceColumnFromCatalogRejectsUnsafeShapes(t *testing.T) {
 	}
 }
 
-func TestApplySQLServerSourceIdentityRequiresSingleBigintPrimaryKey(
+func TestSQLServerSourceIdentityAcceptsExactIntAndBigintColumns(
+	t *testing.T,
+) {
+	for _, test := range []struct {
+		name      string
+		typeName  string
+		maxLength int
+		precision int
+		wantType  string
+		wantBase  string
+	}{
+		{
+			name:      "int",
+			typeName:  "int",
+			maxLength: 4,
+			precision: 10,
+			wantType:  "integer",
+			wantBase:  "int",
+		},
+		{
+			name:      "bigint",
+			typeName:  "bigint",
+			maxLength: 8,
+			precision: 19,
+			wantType:  "bigint",
+			wantBase:  "bigint",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := sqlServerSourceTestColumn(
+				"id",
+				test.typeName,
+				test.maxLength,
+				test.precision,
+				0,
+			)
+			catalog.identity = true
+			catalog.identitySeed = sql.NullInt64{Int64: 1, Valid: true}
+			catalog.identityIncrement = sql.NullInt64{
+				Int64: 1,
+				Valid: true,
+			}
+			catalog.identityLast = sql.NullInt64{Int64: 41, Valid: true}
+			catalog.identityNotForReplication = sql.NullBool{Valid: true}
+
+			column, identity, err := sqlServerSourceColumnFromCatalog(catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if column.Type != test.wantType ||
+				column.DeclaredType == nil ||
+				column.DeclaredType.Base != test.wantBase ||
+				identity == nil ||
+				identity.column != "id" ||
+				identity.frontier == nil ||
+				*identity.frontier != 41 {
+				t.Fatalf(
+					"column = %#v, identity = %#v",
+					column,
+					identity,
+				)
+			}
+		})
+	}
+
+	unsupported := sqlServerSourceTestColumn("id", "smallint", 2, 5, 0)
+	unsupported.identity = true
+	unsupported.identitySeed = sql.NullInt64{Int64: 1, Valid: true}
+	unsupported.identityIncrement = sql.NullInt64{Int64: 1, Valid: true}
+	unsupported.identityNotForReplication = sql.NullBool{Valid: true}
+	if _, _, err := sqlServerSourceColumnFromCatalog(unsupported); err == nil {
+		t.Fatal("smallint SQL Server identity was accepted")
+	}
+}
+
+func TestApplySQLServerSourceIdentityRequiresSingleSupportedPrimaryKey(
 	t *testing.T,
 ) {
 	frontier := int64(41)
@@ -477,6 +570,32 @@ func TestApplySQLServerSourceIdentityRequiresSingleBigintPrimaryKey(
 		&sqlServerSourceIdentityCatalog{column: "id"},
 	); err == nil {
 		t.Fatal("composite-key SQL Server identity was accepted")
+	}
+
+	intTable := schema.Table{
+		Schema: "dbo",
+		Name:   "votes",
+		Columns: []schema.Column{{
+			Name:               "id",
+			Type:               "integer",
+			PrimaryKey:         true,
+			PrimaryKeyPosition: 1,
+			DeclaredType:       &schema.DeclaredType{Base: "int"},
+		}},
+	}
+	if err := applySQLServerSourceIdentity(
+		&intTable,
+		&sqlServerSourceIdentityCatalog{column: "id"},
+	); err != nil {
+		t.Fatalf("apply int SQL Server identity: %v", err)
+	}
+
+	intTable.Columns[0].DeclaredType.Base = "smallint"
+	if err := applySQLServerSourceIdentity(
+		&intTable,
+		&sqlServerSourceIdentityCatalog{column: "id"},
+	); err == nil {
+		t.Fatal("smallint SQL Server identity was accepted")
 	}
 }
 

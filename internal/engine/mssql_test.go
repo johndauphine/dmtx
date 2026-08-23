@@ -20,6 +20,7 @@ func TestSQLServerDSNRequiresEncryptionAndEscapesCredentials(t *testing.T) {
 	}
 	if !strings.Contains(dsn, "encrypt=true") ||
 		!strings.Contains(dsn, "guid+conversion=true") ||
+		!strings.Contains(dsn, "packet+size=16383") ||
 		!strings.Contains(dsn, "tlsmin=1.2") ||
 		!strings.Contains(
 			dsn,

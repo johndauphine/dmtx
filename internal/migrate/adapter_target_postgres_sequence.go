@@ -8,6 +8,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/johndauphine/dmtx/internal/schema"
 )
@@ -154,24 +155,39 @@ func validatePostgresIdentitySequenceState(
 	table schema.Table,
 	state postgresIdentitySequenceState,
 ) error {
+	expectedType, expectedMaximum, err := postgresIdentitySequenceContract(
+		table,
+	)
+	if err != nil {
+		return err
+	}
 	if state.objectID <= 0 ||
 		state.namespace == "" ||
 		state.name == "" ||
 		state.persistence != "p" ||
-		state.dataType != "bigint" ||
+		state.dataType != expectedType ||
 		state.start != 1 ||
 		state.increment != 1 ||
 		state.minimum != 1 ||
-		state.maximum != math.MaxInt64 ||
+		state.maximum != expectedMaximum ||
 		state.cache != 1 ||
 		state.cycle ||
 		!state.canRead ||
 		!state.canUpdate ||
 		!state.canAlter {
 		return fmt.Errorf(
-			"PostgreSQL table %s identity sequence is not a permanent, owned BIGINT sequence with start 1, increment 1, bounds 1..%d, cache 1, no cycle, and required SELECT/UPDATE/ALTER authority",
+			"PostgreSQL table %s identity sequence is not a permanent, owned %s sequence with start 1, increment 1, bounds 1..%d, cache 1, no cycle, and required SELECT/UPDATE/ALTER authority",
 			table.Name,
-			int64(math.MaxInt64),
+			strings.ToUpper(expectedType),
+			expectedMaximum,
+		)
+	}
+	if table.Identity.Frontier != nil &&
+		*table.Identity.Frontier > state.maximum {
+		return fmt.Errorf(
+			"PostgreSQL table %s identity frontier exceeds the %s sequence maximum",
+			table.Name,
+			strings.ToUpper(expectedType),
 		)
 	}
 	if state.lastValue.Valid &&
@@ -183,6 +199,48 @@ func validatePostgresIdentitySequenceState(
 		)
 	}
 	return nil
+}
+
+// postgresIdentitySequenceContract derives the exact sequence type and bounds
+// PostgreSQL creates for the projected identity column. Frontiers and keyset
+// cursors remain int64 in DMTX; the narrower INTEGER case is admitted only
+// when its catalog sequence proves the corresponding int32 bound.
+func postgresIdentitySequenceContract(
+	table schema.Table,
+) (string, int64, error) {
+	if table.Identity == nil {
+		return "", 0, fmt.Errorf(
+			"PostgreSQL table %s identity sequence has no planned identity",
+			table.Name,
+		)
+	}
+	for _, column := range table.Columns {
+		if column.Name != table.Identity.Column {
+			continue
+		}
+		expected, err := expectedPostgresCatalogType(column)
+		if err != nil {
+			return "", 0, err
+		}
+		switch expected.name {
+		case "int4":
+			return "integer", math.MaxInt32, nil
+		case "int8":
+			return "bigint", math.MaxInt64, nil
+		default:
+			return "", 0, fmt.Errorf(
+				"PostgreSQL table %s identity column %s has unsupported sequence type %s",
+				table.Name,
+				column.Name,
+				expected.name,
+			)
+		}
+	}
+	return "", 0, fmt.Errorf(
+		"PostgreSQL table %s identity column %s is missing from the planned schema",
+		table.Name,
+		table.Identity.Column,
+	)
 }
 
 func preflightPostgresIdentitySequence(

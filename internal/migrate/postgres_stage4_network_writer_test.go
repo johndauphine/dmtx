@@ -58,7 +58,7 @@ func TestPostgresStage4NetworkWriterFencesProofAndWriteInOneTransaction(
 		t.Fatalf("operations = %#v, want %#v", got, want)
 	}
 	if got, want := transaction.statements[0],
-		`LOCK TABLE "public"."parents" IN SHARE UPDATE EXCLUSIVE MODE`; got != want {
+		`LOCK TABLE "public"."parents" IN ROW EXCLUSIVE MODE`; got != want {
 		t.Fatalf("fence statement = %q, want %q", got, want)
 	}
 	if transaction.proofNamespace != "public" ||
@@ -146,6 +146,77 @@ func TestPostgresStage4NetworkRebuildWriterSeparatesFreshAndReplay(
 			t.Fatalf("replay statement can update a row: %q", statement)
 		}
 	})
+}
+
+func TestPostgresStage4NetworkCanonicalRebuildUsesOnlyCertifiedSQLServerShapes(
+	t *testing.T,
+) {
+	table := postgresStage4NetworkWriterTestTable()
+	columns := []string{"id", "code"}
+
+	writer, transaction := newPostgresStage4NetworkTestWriter()
+	canonicalRows := [][]any{{int64(1), "source"}}
+	if _, err := writer.WriteStage4NetworkCanonicalRebuildBatch(
+		context.Background(),
+		"mssql",
+		false,
+		table,
+		columns,
+		NetworkWriteFreshInsert,
+		canonicalRows,
+	); err != nil {
+		t.Fatalf("canonical SQL Server rebuild: %v", err)
+	}
+	if _, ok := transaction.copyRows[0][0].(int64); !ok {
+		t.Fatalf("certified copied integer type = %T, want int64", transaction.copyRows[0][0])
+	}
+
+	writer, transaction = newPostgresStage4NetworkTestWriter()
+	fallbackRows := [][]any{{int64(1), "source"}}
+	if _, err := writer.WriteStage4NetworkCanonicalRebuildBatch(
+		context.Background(),
+		"postgres",
+		false,
+		table,
+		columns,
+		NetworkWriteFreshInsert,
+		fallbackRows,
+	); err != nil {
+		t.Fatalf("non-SQL Server fallback rebuild: %v", err)
+	}
+	if _, ok := transaction.copyRows[0][0].(int32); !ok {
+		t.Fatalf("fallback copied integer type = %T, want int32", transaction.copyRows[0][0])
+	}
+	if _, ok := fallbackRows[0][0].(int64); !ok {
+		t.Fatalf("fallback mutated borrowed source row to %T", fallbackRows[0][0])
+	}
+
+	writer, transaction = newPostgresStage4NetworkTestWriter()
+	if _, err := writer.WriteStage4NetworkCanonicalRebuildBatch(
+		context.Background(),
+		"mssql",
+		true,
+		table,
+		columns,
+		NetworkWriteFreshInsert,
+		[][]any{{int64(1), "source"}},
+	); err != nil {
+		t.Fatalf("set-fenced canonical rebuild: %v", err)
+	}
+	if got, want := transaction.operations, []string{
+		"begin",
+		"write-copy",
+		"commit",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("set-fenced operations = %#v, want %#v", got, want)
+	}
+
+	numeric := table
+	numeric.Columns = append([]schema.Column(nil), table.Columns...)
+	numeric.Columns[1].Type = "numeric"
+	if postgresSQLServerRowsAreCopyCanonical(numeric, columns) {
+		t.Fatal("numeric SQL Server column was admitted without conversion")
+	}
 }
 
 func TestPostgresStage4NetworkRebuildWriterFreshConflictDoesNotCommit(
@@ -699,6 +770,7 @@ type postgresStage4NetworkTestTransaction struct {
 	discarded      bool
 	copyCalls      int
 	copyTargets    [][]string
+	copyRows       [][]any
 	copyErr        error
 }
 
@@ -759,6 +831,7 @@ func (transaction *postgresStage4NetworkTestTransaction) CopyRows(
 		transaction.copyTargets,
 		append([]string(nil), table...),
 	)
+	transaction.copyRows = cloneNetworkTestRows(rows)
 	return int64(len(rows)), transaction.copyErr
 }
 

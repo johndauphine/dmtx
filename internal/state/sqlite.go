@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,7 +15,67 @@ import (
 
 // SQLiteStore persists durable, queryable migration state locally.
 type SQLiteStore struct {
-	Path string
+	Path    string
+	session *sqliteSession
+}
+
+type sqliteSession struct {
+	openOnce sync.Once
+	database *sql.DB
+	openErr  error
+
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// sqliteCoreSchemaVersion is stored in SQLite's application-owned
+// user_version slot. State mutations open short-lived handles by design, so
+// replaying every idempotent CREATE and every already-applied ALTER on each
+// page checkpoint turns schema verification into data-plane work. A version
+// match proves that Open already completed this exact core upgrade sequence.
+const sqliteCoreSchemaVersion = 1
+
+// WithPersistentSQLiteBackend gives one application command a reusable state
+// database pool while preserving SQLiteStore's value semantics and the public
+// Open method used by diagnostics. The returned close function owns only this
+// command-scoped session; literal stores and ordinary read-only commands keep
+// their historical open-per-call behavior.
+func WithPersistentSQLiteBackend(
+	backend Backend,
+) (Backend, func() error) {
+	store, ok := backend.(SQLiteStore)
+	if !ok {
+		return backend, func() error { return nil }
+	}
+	session := &sqliteSession{}
+	store.session = session
+	return store, func() error {
+		session.closeOnce.Do(func() {
+			if session.database != nil {
+				session.closeErr = session.database.Close()
+			}
+		})
+		return session.closeErr
+	}
+}
+
+func (store SQLiteStore) openForOperation() (
+	*sql.DB,
+	func() error,
+	error,
+) {
+	if store.session == nil {
+		database, err := store.Open()
+		if err != nil {
+			return nil, func() error { return nil }, err
+		}
+		return database, database.Close, nil
+	}
+	store.session.openOnce.Do(func() {
+		store.session.database, store.session.openErr = store.Open()
+	})
+	return store.session.database, func() error { return nil },
+		store.session.openErr
 }
 
 type sqliteRowsResult interface {
@@ -57,11 +118,11 @@ type Task struct {
 
 // AdvanceIntegerKeysetTask records a target-acknowledged page frontier.
 func (store SQLiteStore) AdvanceIntegerKeysetTask(runID, table string, rowsDone int, watermark int64) error {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	result, err := database.Exec(`UPDATE tasks SET rows_done = ?, integer_watermark = ? WHERE run_id = ? AND table_name = ? AND status = 'running'`, rowsDone, watermark, runID, table)
 	if err != nil {
 		return fmt.Errorf("advance table checkpoint: %w", err)
@@ -78,11 +139,11 @@ func (store SQLiteStore) AdvanceIntegerKeysetTask(runID, table string, rowsDone 
 
 // AdvanceRowNumberTask records a target-acknowledged row-number frontier.
 func (store SQLiteStore) AdvanceRowNumberTask(runID, table string, rowsDone int, watermark int64) error {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	result, err := database.Exec(`UPDATE tasks SET rows_done = ?, row_number_watermark = ? WHERE run_id = ? AND table_name = ? AND status = 'running'`, rowsDone, watermark, runID, table)
 	if err != nil {
 		return fmt.Errorf("advance table checkpoint: %w", err)
@@ -102,11 +163,11 @@ func (store SQLiteStore) Append(run Run) error {
 	if err := validateRunRecord(run); err != nil {
 		return err
 	}
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	existingRows, err := database.Query(`
 		SELECT id, source, target, source_engine, source_identity, target_identity,
 		       lease_target, lease_owner_token, lease_generation,
@@ -157,11 +218,11 @@ func (store SQLiteStore) Append(run Run) error {
 
 // CreateTask writes a table checkpoint before its target mutation begins.
 func (store SQLiteStore) CreateTask(task Task) error {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 
 	_, err = database.Exec(`
 		INSERT INTO tasks (run_id, table_name, status, rows_done, started_at, completed_at)
@@ -175,11 +236,11 @@ func (store SQLiteStore) CreateTask(task Task) error {
 
 // CompleteTask records the validated completion frontier for a table.
 func (store SQLiteStore) CompleteTask(runID, table string, rowsDone int, completedAt time.Time) error {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 
 	result, err := database.Exec(`
 		UPDATE tasks
@@ -201,11 +262,11 @@ func (store SQLiteStore) CompleteTask(runID, table string, rowsDone int, complet
 
 // ListTasks returns a run's table checkpoints in deterministic table order.
 func (store SQLiteStore) ListTasks(runID string) ([]Task, error) {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return nil, err
 	}
-	defer database.Close()
+	defer closeDatabase()
 
 	rows, err := database.Query(`
 		SELECT run_id, table_name, status, rows_done, integer_watermark, row_number_watermark, started_at, completed_at
@@ -246,11 +307,11 @@ func (store SQLiteStore) ListTasks(runID string) ([]Task, error) {
 
 // Latest returns the most recently recorded run state.
 func (store SQLiteStore) Latest() (Run, bool, error) {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return Run{}, false, err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	row := database.QueryRow(`
 		SELECT id, source, target, source_engine, source_identity, target_identity,
 		       lease_target, lease_owner_token, lease_generation,
@@ -269,11 +330,11 @@ func (store SQLiteStore) Latest() (Run, bool, error) {
 
 // List returns migration runs in chronological order.
 func (store SQLiteStore) List() ([]Run, error) {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return nil, err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	rows, err := database.Query(`
 		SELECT id, source, target, source_engine, source_identity, target_identity,
 		       lease_target, lease_owner_token, lease_generation,
@@ -319,6 +380,23 @@ func (store SQLiteStore) Open() (*sql.DB, error) {
 	if _, err := database.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
 		database.Close()
 		return nil, fmt.Errorf("configure state database: %w", err)
+	}
+	var coreSchemaVersion int
+	if err := database.QueryRow(`PRAGMA user_version;`).Scan(
+		&coreSchemaVersion,
+	); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("read state database schema version: %w", err)
+	}
+	if coreSchemaVersion == sqliteCoreSchemaVersion {
+		return database, nil
+	}
+	if coreSchemaVersion != 0 {
+		database.Close()
+		return nil, fmt.Errorf(
+			"unsupported state database schema version %d",
+			coreSchemaVersion,
+		)
 	}
 	if _, err := database.Exec(`
 		CREATE TABLE IF NOT EXISTS runs (
@@ -370,6 +448,13 @@ func (store SQLiteStore) Open() (*sql.DB, error) {
 	if _, err := database.Exec(`ALTER TABLE runs ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		database.Close()
 		return nil, fmt.Errorf("upgrade target lease generation: %w", err)
+	}
+	if _, err := database.Exec(
+		`PRAGMA user_version = ` +
+			fmt.Sprintf("%d", sqliteCoreSchemaVersion) + `;`,
+	); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("record state database schema version: %w", err)
 	}
 	return database, nil
 }
