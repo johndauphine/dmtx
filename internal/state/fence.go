@@ -29,6 +29,8 @@ type LeaseGuard struct {
 
 	targetMu         sync.Mutex
 	targetProtection *leaseTargetProtection
+	targetClosing    bool
+	targetErr        error
 }
 
 // leaseTargetProtection coalesces overlapping target writes beneath one
@@ -153,6 +155,10 @@ func (guard *LeaseGuard) ProtectConcurrent(
 			return err
 		}
 		guard.targetMu.Lock()
+		if guard.targetClosing {
+			guard.targetMu.Unlock()
+			return fmt.Errorf("%w: lease guard is releasing", ErrLeaseLost)
+		}
 		protection := guard.targetProtection
 		if protection == nil {
 			started, err := guard.beginTargetProtection(ctx)
@@ -260,6 +266,7 @@ func (guard *LeaseGuard) finishTargetProtection(
 
 	guard.targetMu.Lock()
 	protection.err = protectionErr
+	guard.targetErr = errors.Join(guard.targetErr, protectionErr)
 	guard.targetProtection = nil
 	close(protection.done)
 	guard.targetMu.Unlock()
@@ -285,11 +292,19 @@ func (guard *LeaseGuard) Release() error {
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
 	guard.targetMu.Lock()
+	guard.targetClosing = true
 	protection := guard.targetProtection
 	guard.targetMu.Unlock()
 	if protection != nil {
 		<-protection.done
 	}
+	guard.targetMu.Lock()
+	protectionErr := guard.targetErr
+	if protection != nil && protection.err != nil &&
+		!errors.Is(protectionErr, protection.err) {
+		protectionErr = errors.Join(protectionErr, protection.err)
+	}
+	guard.targetMu.Unlock()
 	releaseErr := guard.store.ReleaseLease(guard.lease)
 	var coordinatorCloseErr error
 	if guard.coordinator != nil {
@@ -299,8 +314,13 @@ func (guard *LeaseGuard) Release() error {
 	if guard.leaseDatabase != nil {
 		leaseCloseErr = guard.leaseDatabase.Close()
 	}
-	if err := errors.Join(releaseErr, coordinatorCloseErr, leaseCloseErr); err != nil {
-		return fmt.Errorf("%w: %v", ErrLeaseLost, err)
+	if err := errors.Join(
+		protectionErr,
+		releaseErr,
+		coordinatorCloseErr,
+		leaseCloseErr,
+	); err != nil {
+		return fmt.Errorf("%w: %w", ErrLeaseLost, err)
 	}
 	return nil
 }

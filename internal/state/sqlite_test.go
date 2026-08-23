@@ -71,6 +71,60 @@ func TestPersistentSQLiteBackendReusesOneCommandScopedPool(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreWriteTransactionsWaitForConcurrentWriter(t *testing.T) {
+	store := SQLiteStore{Path: filepath.Join(t.TempDir(), "state.db")}
+	first, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	firstTransaction, err := first.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type beginResult struct {
+		transaction *sql.Tx
+		err         error
+	}
+	started := make(chan struct{})
+	result := make(chan beginResult, 1)
+	go func() {
+		close(started)
+		transaction, beginErr := second.Begin()
+		result <- beginResult{transaction: transaction, err: beginErr}
+	}()
+	<-started
+	select {
+	case value := <-result:
+		if value.transaction != nil {
+			value.transaction.Rollback()
+		}
+		firstTransaction.Rollback()
+		t.Fatalf("second write transaction did not wait: %v", value.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := firstTransaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case value := <-result:
+		if value.err != nil {
+			t.Fatalf("begin second write transaction: %v", value.err)
+		}
+		if err := value.transaction.Rollback(); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second write transaction remained blocked")
+	}
+}
+
 func TestSQLiteStoreRejectsUnknownCoreSchemaVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	store := SQLiteStore{Path: path}

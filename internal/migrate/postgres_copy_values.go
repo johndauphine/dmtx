@@ -348,27 +348,6 @@ func postgresTemporalColumnPrecision(
 	return precision, true, nil
 }
 
-func validatePostgresTemporalPrecision(
-	column schema.Column,
-	value time.Time,
-) error {
-	precision, constrained, err := postgresTemporalColumnPrecision(column)
-	if err != nil || !constrained {
-		return err
-	}
-	unit := 1
-	for digits := precision; digits < 9; digits++ {
-		unit *= 10
-	}
-	if value.Nanosecond()%unit != 0 {
-		return fmt.Errorf(
-			"timestamp exceeds PostgreSQL fractional-second precision %d",
-			precision,
-		)
-	}
-	return nil
-}
-
 func postgresTimeColumnPrecision(
 	column schema.Column,
 ) (int, bool, error) {
@@ -390,27 +369,6 @@ func postgresTimeColumnPrecision(
 		)
 	}
 	return precision, true, nil
-}
-
-func validatePostgresTimePrecision(
-	column schema.Column,
-	microseconds int64,
-) error {
-	precision, constrained, err := postgresTimeColumnPrecision(column)
-	if err != nil || !constrained {
-		return err
-	}
-	unit := int64(1)
-	for digits := precision; digits < 6; digits++ {
-		unit *= 10
-	}
-	if microseconds%unit != 0 {
-		return fmt.Errorf(
-			"time exceeds PostgreSQL fractional-second precision %d",
-			precision,
-		)
-	}
-	return nil
 }
 
 func exactPostgresInteger(value any) (*big.Int, error) {

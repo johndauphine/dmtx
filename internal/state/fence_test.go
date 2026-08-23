@@ -151,6 +151,74 @@ func TestLeaseGuardProtectConcurrentDoesNotBarrierCompletedWriters(
 	}
 }
 
+func TestLeaseGuardReleaseReportsConcurrentProtectionFailure(t *testing.T) {
+	t.Parallel()
+	store := SQLiteStore{Path: filepath.Join(t.TempDir(), "leases.db")}
+	lease, err := store.AcquireLease("postgres:target", "run-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := NewLeaseGuard(store, lease)
+	protectionErr := errors.New("release concurrent lease fence")
+	protection := &leaseTargetProtection{
+		done: make(chan struct{}),
+		err:  protectionErr,
+	}
+	close(protection.done)
+	guard.targetProtection = protection
+
+	err = guard.Release()
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("release error = %v, want lease loss", err)
+	}
+	if !errors.Is(err, protectionErr) {
+		t.Fatalf("release error = %v, want concurrent protection failure", err)
+	}
+}
+
+func TestLeaseGuardReleaseRejectsNewConcurrentProtection(t *testing.T) {
+	t.Parallel()
+	store := SQLiteStore{Path: filepath.Join(t.TempDir(), "leases.db")}
+	lease, err := store.AcquireLease("postgres:target", "run-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := NewLeaseGuard(store, lease)
+	protection := &leaseTargetProtection{done: make(chan struct{})}
+	guard.targetProtection = protection
+	released := make(chan error, 1)
+	go func() { released <- guard.Release() }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		guard.targetMu.Lock()
+		closing := guard.targetClosing
+		guard.targetMu.Unlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("release did not close the concurrent protection gate")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	operationCalled := false
+	err = guard.ProtectConcurrent(context.Background(), func() error {
+		operationCalled = true
+		return nil
+	})
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("concurrent protection during release error = %v, want lease loss", err)
+	}
+	if operationCalled {
+		t.Fatal("operation ran after lease release began")
+	}
+	close(protection.done)
+	if err := <-released; err != nil {
+		t.Fatalf("release lease: %v", err)
+	}
+}
+
 func TestFenceBackendAdvertisesOptionalStage4CapabilitiesOnlyWhenUnderlyingSupportsThem(
 	t *testing.T,
 ) {

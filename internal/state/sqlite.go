@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -367,7 +369,11 @@ func (store SQLiteStore) Open() (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(store.Path), 0o700); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
 	}
-	database, err := sql.Open("sqlite", store.Path)
+	absolutePath, err := filepath.Abs(store.Path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve state database path: %w", err)
+	}
+	database, err := sql.Open("sqlite", sqliteStateURI(absolutePath))
 	if err != nil {
 		return nil, fmt.Errorf("open state database: %w", err)
 	}
@@ -457,6 +463,24 @@ func (store SQLiteStore) Open() (*sql.DB, error) {
 		return nil, fmt.Errorf("record state database schema version: %w", err)
 	}
 	return database, nil
+}
+
+// sqliteStateURI applies connection-local safety settings to every connection
+// the database/sql pool may create. State transactions read before writing, so
+// acquiring the write reservation at BEGIN avoids a pair of concurrent deferred
+// transactions deadlocking during lock upgrade. The timeout then lets the later
+// writer wait for the earlier durable commit instead of returning SQLITE_BUSY.
+func sqliteStateURI(path string) string {
+	normalized := filepath.ToSlash(path)
+	if runtime.GOOS == "windows" && !strings.HasPrefix(normalized, "/") {
+		normalized = "/" + normalized
+	}
+	location := url.URL{Scheme: "file", Path: normalized}
+	query := location.Query()
+	query.Add("_pragma", "busy_timeout=5000")
+	query.Set("_txlock", "immediate")
+	location.RawQuery = query.Encode()
+	return location.String()
 }
 
 type rowScanner interface{ Scan(dest ...any) error }
