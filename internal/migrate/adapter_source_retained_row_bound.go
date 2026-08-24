@@ -728,8 +728,21 @@ func newAdapterRetainedRowBoundPlan(
 	table string,
 	columnCount int,
 ) (adapterRetainedRowBoundPlan, error) {
+	base, err := adapterRetainedRowBaseBytes(columnCount)
+	if err != nil {
+		return adapterRetainedRowBoundPlan{}, err
+	}
+	return adapterRetainedRowBoundPlan{
+		engine:    engine,
+		table:     table,
+		baseBytes: base,
+		columns:   make([]adapterRetainedColumnBound, 0, columnCount),
+	}, nil
+}
+
+func adapterRetainedRowBaseBytes(columnCount int) (int64, error) {
 	if columnCount <= 0 {
-		return adapterRetainedRowBoundPlan{}, errors.New(
+		return 0, errors.New(
 			"retained row bound requires selected columns",
 		)
 	}
@@ -740,18 +753,13 @@ func newAdapterRetainedRowBoundPlan(
 		slotBytes,
 	)
 	if err != nil {
-		return adapterRetainedRowBoundPlan{}, err
+		return 0, err
 	}
 	base, err := addAdapterRetainedBytes(sliceBytes, slots)
 	if err != nil {
-		return adapterRetainedRowBoundPlan{}, err
+		return 0, err
 	}
-	return adapterRetainedRowBoundPlan{
-		engine:    engine,
-		table:     table,
-		baseBytes: base,
-		columns:   make([]adapterRetainedColumnBound, 0, columnCount),
-	}, nil
+	return base, nil
 }
 
 func planPostgresRetainedRowBound(
@@ -1778,11 +1786,11 @@ func executeAdapterRetainedRowBound(
 			"retained row bound did not consume exact live evidence",
 		)
 	}
-	// A range reader owns the already-cloned rows while database/sql scans the
-	// next row. During conversion and []byte cloning, the raw row and its owned
-	// form can coexist; the scan destination slice also remains live. Reserving
-	// two complete maximum-sized rows plus one interface destination inventory
-	// safely covers maxRows=1 and composes conservatively as
+	// A range reader owns the values database/sql has converted while the driver
+	// may still retain its raw row. Those two forms can coexist during Scan; the
+	// scan destination slice also remains live. Reserving two complete
+	// maximum-sized rows plus one interface destination inventory safely covers
+	// maxRows=1 and composes conservatively as
 	// maxRows*UpperBoundBytes for larger pages.
 	rawAndOwned, err := multiplyAdapterRetainedBytes(total, 2)
 	if err != nil {
@@ -1986,15 +1994,21 @@ func multiplyAdapterRetainedBytes(
 }
 
 func measureAdapterRetainedRowBytes(values []any) (int64, error) {
-	size, err := newAdapterRetainedRowBoundPlan(
-		"measurement",
-		"row",
-		len(values),
-	)
+	base, err := adapterRetainedRowBaseBytes(len(values))
 	if err != nil {
 		return 0, err
 	}
-	total := size.baseBytes
+	return measureAdapterRetainedRowBytesFromBase(values, base)
+}
+
+func measureAdapterRetainedRowBytesFromBase(
+	values []any,
+	base int64,
+) (int64, error) {
+	if base <= 0 {
+		return 0, errors.New("retained row base byte count is invalid")
+	}
+	total := base
 	for _, value := range values {
 		var retained int64
 		switch typed := value.(type) {

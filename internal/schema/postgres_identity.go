@@ -37,7 +37,9 @@ func postgresIdentityColumn(table Table) (string, error) {
 		return "", postgresIdentityPolicy(table.Name)
 	}
 	renderedType, err := renderColumnType(column, Postgres)
-	if err != nil || !strings.EqualFold(renderedType, "BIGINT") {
+	if err != nil ||
+		(!strings.EqualFold(renderedType, "INTEGER") &&
+			!strings.EqualFold(renderedType, "BIGINT")) {
 		return "", postgresIdentityPolicy(table.Name)
 	}
 	return column.Name, nil

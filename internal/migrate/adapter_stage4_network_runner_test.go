@@ -137,6 +137,7 @@ func TestStage4AdapterNetworkWriterRequiresIdempotentModeAndRebasesReceipt(
 		target,
 		execution.ranges,
 		execution.plan.ReplayMode,
+		execution.plan.SourceEngine,
 		request,
 	)
 	if err != nil {
@@ -155,6 +156,7 @@ func TestStage4AdapterNetworkWriterRequiresIdempotentModeAndRebasesReceipt(
 		target,
 		execution.ranges,
 		execution.plan.ReplayMode,
+		execution.plan.SourceEngine,
 		request,
 	); err == nil || len(target.snapshotWrites()) != before {
 		t.Fatalf("fresh mode error=%v writes=%#v", err, target.snapshotWrites())
@@ -203,6 +205,7 @@ func TestStage4AdapterNetworkRebuildUsesDuplicateSafeWriterForFreshAndReplay(
 			target,
 			execution.ranges,
 			execution.plan.ReplayMode,
+			execution.plan.SourceEngine,
 			request,
 		); err != nil {
 			t.Fatalf("write rebuild mode %q: %v", mode, err)

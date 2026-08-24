@@ -218,6 +218,7 @@ type adapterStableNetworkTableSession struct {
 	transaction *sql.Tx
 	connection  *sql.Conn
 	closeFn     func() error
+	children    []*adapterStableNetworkTableSession
 
 	closeOnce sync.Once
 	closeErr  error
@@ -454,30 +455,46 @@ func OpenAdapterStableNetworkTableSource(
 		relational.namespace,
 		table.Name,
 	)
-	countExpression := "COUNT(*)"
-	lockHint := ""
 	if relational.spec.engine == "mssql" {
-		countExpression = "COUNT_BIG(*)"
-		lockHint = " WITH (TABLOCK, HOLDLOCK)"
-	}
-	var count int64
-	if err := transaction.QueryRowContext(
-		ctx,
-		"SELECT "+countExpression+" FROM "+qualified+lockHint,
-	).Scan(&count); err != nil {
-		return fail(fmt.Errorf(
-			"pin %s table-stable source view for %s: %w",
-			relational.spec.displayName,
-			table.Name,
-			err,
-		))
-	}
-	if count < 0 {
-		return fail(fmt.Errorf(
-			"pin %s table-stable source view for %s: negative row count",
-			relational.spec.displayName,
-			table.Name,
-		))
+		rows, lockErr := transaction.QueryContext(
+			ctx,
+			"SELECT TOP (0) 1 FROM "+qualified+" WITH (TABLOCK, HOLDLOCK)",
+		)
+		if lockErr == nil {
+			lockErr = rows.Close()
+		}
+		if lockErr != nil {
+			return fail(fmt.Errorf(
+				"pin %s table-stable source view for %s: %w",
+				relational.spec.displayName,
+				table.Name,
+				lockErr,
+			))
+		}
+	} else {
+		// MVCC engines must execute a statement to pin the repeatable-read
+		// snapshot. The exact count is useful validation that the result shape is
+		// sane; SQL Server above needs only a table lock and must not scan the
+		// complete relation merely to acquire it.
+		var count int64
+		if err := transaction.QueryRowContext(
+			ctx,
+			"SELECT COUNT(*) FROM "+qualified,
+		).Scan(&count); err != nil {
+			return fail(fmt.Errorf(
+				"pin %s table-stable source view for %s: %w",
+				relational.spec.displayName,
+				table.Name,
+				err,
+			))
+		}
+		if count < 0 {
+			return fail(fmt.Errorf(
+				"pin %s table-stable source view for %s: negative row count",
+				relational.spec.displayName,
+				table.Name,
+			))
+		}
 	}
 
 	view, err := newAdapterRetainedStableRelationalView(
@@ -523,8 +540,13 @@ func (session *adapterStableNetworkTableSession) Close() error {
 		return nil
 	}
 	session.closeOnce.Do(func() {
+		for _, child := range session.children {
+			if childErr := child.Close(); childErr != nil {
+				session.closeErr = errors.Join(session.closeErr, childErr)
+			}
+		}
 		if session.closeFn != nil {
-			session.closeErr = session.closeFn()
+			session.closeErr = errors.Join(session.closeErr, session.closeFn())
 		}
 		if session.transaction == nil {
 			if session.connection == nil {

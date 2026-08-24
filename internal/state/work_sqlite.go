@@ -7,12 +7,33 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
 const sqliteWorkSchemaVersion = 1
 
 func ensureSQLiteWorkSchema(database *sql.DB) error {
+	var durableVersion int
+	fastPathErr := database.QueryRow(
+		`SELECT version FROM state_schema_versions WHERE component = 'stage2_work'`,
+	).Scan(&durableVersion)
+	if fastPathErr == nil {
+		if durableVersion != sqliteWorkSchemaVersion {
+			return fmt.Errorf(
+				"unsupported work-state schema version %d",
+				durableVersion,
+			)
+		}
+		return nil
+	}
+	if !errors.Is(fastPathErr, sql.ErrNoRows) &&
+		!strings.Contains(
+			strings.ToLower(fastPathErr.Error()),
+			"no such table",
+		) {
+		return fmt.Errorf("read work-state schema: %w", fastPathErr)
+	}
 	transaction, err := database.Begin()
 	if err != nil {
 		return fmt.Errorf("begin work-state schema: %w", err)
@@ -62,11 +83,11 @@ func (store SQLiteStore) EnsureWorkPlan(task WorkTask, ranges []RangeState) (boo
 	if err != nil {
 		return false, err
 	}
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return false, err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	if err := ensureSQLiteWorkSchema(database); err != nil {
 		return false, err
 	}
@@ -113,11 +134,11 @@ func (store SQLiteStore) ResetWorkPlan(task WorkTask, ranges []RangeState) error
 	if err != nil {
 		return err
 	}
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	if err := ensureSQLiteWorkSchema(database); err != nil {
 		return err
 	}
@@ -153,11 +174,11 @@ func (store SQLiteStore) ResetWorkPlan(task WorkTask, ranges []RangeState) error
 }
 
 func (store SQLiteStore) ListWork(runID string) ([]WorkTask, []RangeState, error) {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return nil, nil, err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	if err := ensureSQLiteWorkSchema(database); err != nil {
 		return nil, nil, err
 	}
@@ -221,11 +242,11 @@ func (store SQLiteStore) BeginRangeChunk(intent RangeChunkIntent) error {
 }
 
 func (store SQLiteStore) RecordRangeAttempt(attempt RangeAttempt) (err error) {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	if err := ensureSQLiteWorkSchema(database); err != nil {
 		return err
 	}
@@ -328,11 +349,11 @@ func (store SQLiteStore) RecordRangeAttempt(attempt RangeAttempt) (err error) {
 }
 
 func (store SQLiteStore) AcknowledgeRange(acknowledgement RangeAcknowledgement) (RangeState, error) {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return RangeState{}, err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	if err := ensureSQLiteWorkSchema(database); err != nil {
 		return RangeState{}, err
 	}
@@ -391,11 +412,11 @@ func (store SQLiteStore) CompleteRange(runID string, task TaskKey, rangeID, topo
 }
 
 func (store SQLiteStore) CompleteWorkTask(runID string, task TaskKey, topologyHash string, completedAt time.Time) error {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	if err := ensureSQLiteWorkSchema(database); err != nil {
 		return err
 	}
@@ -458,11 +479,11 @@ func (store SQLiteStore) CompleteWorkTask(runID string, task TaskKey, topologyHa
 }
 
 func (store SQLiteStore) mutateSQLiteRange(runID string, task TaskKey, rangeID string, mutate func(*RangeState) error) error {
-	database, err := store.Open()
+	database, closeDatabase, err := store.openForOperation()
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeDatabase()
 	if err := ensureSQLiteWorkSchema(database); err != nil {
 		return err
 	}

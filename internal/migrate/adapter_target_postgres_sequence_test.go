@@ -10,13 +10,7 @@ import (
 )
 
 func TestValidatePostgresIdentitySequenceStateAcceptsExactShape(t *testing.T) {
-	table := schema.Table{
-		Name: "accounts",
-		Identity: &schema.Identity{
-			Column:     "id",
-			Generation: schema.IdentityByDefault,
-		},
-	}
+	table := exactPostgresIdentitySequenceTable("bigint")
 	if err := validatePostgresIdentitySequenceState(
 		table,
 		exactPostgresIdentitySequenceState(),
@@ -76,13 +70,7 @@ func TestValidatePostgresIdentitySequenceStateFailsClosed(t *testing.T) {
 			state.lastValue = sql.NullInt64{Int64: 0, Valid: true}
 		}},
 	}
-	table := schema.Table{
-		Name: "accounts",
-		Identity: &schema.Identity{
-			Column:     "id",
-			Generation: schema.IdentityByDefault,
-		},
-	}
+	table := exactPostgresIdentitySequenceTable("bigint")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			state := exactPostgresIdentitySequenceState()
@@ -93,6 +81,35 @@ func TestValidatePostgresIdentitySequenceStateFailsClosed(t *testing.T) {
 				t.Fatalf("identity sequence error = %v", err)
 			}
 		})
+	}
+}
+
+func TestValidatePostgresIdentitySequenceStateAcceptsIntegerBounds(
+	t *testing.T,
+) {
+	state := exactPostgresIdentitySequenceState()
+	state.dataType = "integer"
+	state.maximum = math.MaxInt32
+	if err := validatePostgresIdentitySequenceState(
+		exactPostgresIdentitySequenceTable("integer"),
+		state,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidatePostgresIdentitySequenceStateRejectsIntegerFrontierPastBounds(
+	t *testing.T,
+) {
+	frontier := int64(math.MaxInt32) + 1
+	table := exactPostgresIdentitySequenceTable("integer")
+	table.Identity.Frontier = &frontier
+	state := exactPostgresIdentitySequenceState()
+	state.dataType = "integer"
+	state.maximum = math.MaxInt32
+	if err := validatePostgresIdentitySequenceState(table, state); err == nil ||
+		!strings.Contains(err.Error(), "frontier exceeds") {
+		t.Fatalf("integer frontier error = %v", err)
 	}
 }
 
@@ -278,5 +295,21 @@ func exactPostgresIdentitySequenceState() postgresIdentitySequenceState {
 		canRead:     true,
 		canUpdate:   true,
 		canAlter:    true,
+	}
+}
+
+func exactPostgresIdentitySequenceTable(typeName string) schema.Table {
+	return schema.Table{
+		Name: "accounts",
+		Identity: &schema.Identity{
+			Column:     "id",
+			Generation: schema.IdentityByDefault,
+		},
+		Columns: []schema.Column{{
+			Name:               "id",
+			Type:               typeName,
+			PrimaryKey:         true,
+			PrimaryKeyPosition: 1,
+		}},
 	}
 }

@@ -925,8 +925,13 @@ func (controller *RuntimeTuningController) applyObservationLocked(
 			reasons,
 			RuntimeReasonQueuePressure,
 		)
-		controller.reduceHalf(&controller.values.ChunkRows)
-		controller.reduceHalf(&controller.values.BufferDepth)
+		// A full bounded queue is ordinary backpressure when the target
+		// writer is slower than the source reader. The byte budget already
+		// caps retained memory, so queue fullness is not evidence that the
+		// current row batch is unsafe. Shrinking ChunkRows here compounds
+		// the writer bottleneck by turning a bounded number of large COPY
+		// operations into thousands of tiny ones. Keep the signal for
+		// growth suppression, but preserve the admitted batching settings.
 	}
 	if observation.ConnectionPressure {
 		safetySignal = true

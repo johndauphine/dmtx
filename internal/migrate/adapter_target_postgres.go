@@ -3,8 +3,10 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/johndauphine/dmtx/internal/config"
 	"github.com/johndauphine/dmtx/internal/engine"
@@ -12,9 +14,118 @@ import (
 )
 
 type postgresTargetAdapter struct {
-	database    *sql.DB
-	batchWriter postgresBatchWriter
-	namespace   string
+	database            *sql.DB
+	batchWriter         postgresBatchWriter
+	namespace           string
+	rebuildFenceMu      sync.RWMutex
+	rebuildFencedTables map[string]struct{}
+}
+
+func (adapter *postgresTargetAdapter) BeginStage4NetworkRebuildSetFence(
+	ctx context.Context,
+	tables []schema.Table,
+) (func() error, error) {
+	if adapter == nil || adapter.database == nil {
+		return nil, NewTransferError(
+			ErrorClassState,
+			fmt.Errorf("PostgreSQL target database is required for the Stage 4 rebuild fence"),
+		)
+	}
+	if ctx == nil {
+		return nil, NewTransferError(
+			ErrorClassState,
+			fmt.Errorf("PostgreSQL Stage 4 rebuild fence context is required"),
+		)
+	}
+	if len(tables) == 0 {
+		return nil, NewTransferError(
+			ErrorClassState,
+			fmt.Errorf("PostgreSQL Stage 4 rebuild fence table set is empty"),
+		)
+	}
+	transaction, err := adapter.database.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, newPostgresSafeOperationError(
+			"begin PostgreSQL Stage 4 rebuild target-set fence for",
+			"selected tables",
+			err,
+		)
+	}
+	fail := func(value error) (func() error, error) {
+		rollbackErr := transaction.Rollback()
+		return nil, errors.Join(value, rollbackErr)
+	}
+	identifiers := make([]string, len(tables))
+	fenced := make(map[string]struct{}, len(tables))
+	for index, table := range tables {
+		if table.Schema == "" || table.Name == "" {
+			return fail(NewTransferError(
+				ErrorClassState,
+				fmt.Errorf("PostgreSQL Stage 4 rebuild fence table identity is incomplete"),
+			))
+		}
+		identifiers[index] = postgresQualified(table.Schema, table.Name)
+		fenced[adapterSourceTableKey(table.Schema, table.Name)] = struct{}{}
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		"LOCK TABLE "+strings.Join(identifiers, ", ")+
+			" IN ROW EXCLUSIVE MODE",
+	); err != nil {
+		return fail(newPostgresSafeOperationError(
+			"acquire PostgreSQL Stage 4 rebuild target-set DDL fence for",
+			"selected tables",
+			err,
+		))
+	}
+	if err := validateStage4PostgresNetworkReplayIsolation(
+		ctx,
+		stage4PostgresSQLReplayCatalogReader{queryer: transaction},
+		tables,
+	); err != nil {
+		return fail(fmt.Errorf(
+			"validate PostgreSQL Stage 4 rebuild target set beneath DDL fence: %w",
+			err,
+		))
+	}
+	adapter.rebuildFenceMu.Lock()
+	if len(adapter.rebuildFencedTables) != 0 {
+		adapter.rebuildFenceMu.Unlock()
+		return fail(NewTransferError(
+			ErrorClassState,
+			fmt.Errorf("PostgreSQL Stage 4 rebuild target-set fence is already active"),
+		))
+	}
+	adapter.rebuildFencedTables = fenced
+	adapter.rebuildFenceMu.Unlock()
+
+	var once sync.Once
+	var releaseErr error
+	return func() error {
+		once.Do(func() {
+			rollbackErr := transaction.Rollback()
+			if errors.Is(rollbackErr, sql.ErrTxDone) {
+				rollbackErr = nil
+			}
+			adapter.rebuildFenceMu.Lock()
+			adapter.rebuildFencedTables = nil
+			adapter.rebuildFenceMu.Unlock()
+			releaseErr = rollbackErr
+		})
+		return releaseErr
+	}, nil
+}
+
+func (adapter *postgresTargetAdapter) hasStage4NetworkRebuildSetFence(
+	table schema.Table,
+) bool {
+	if adapter == nil {
+		return false
+	}
+	adapter.rebuildFenceMu.RLock()
+	_, ok := adapter.rebuildFencedTables[adapterSourceTableKey(table.Schema, table.Name)]
+	adapter.rebuildFenceMu.RUnlock()
+	return ok
 }
 
 func (adapter *postgresTargetAdapter) postgresDatabaseHandle() *sql.DB {
@@ -352,6 +463,45 @@ func (adapter *postgresTargetAdapter) WriteStage4NetworkRebuildBatch(
 	}
 	return writer.WriteStage4NetworkRebuildBatch(
 		ctx,
+		table,
+		columns,
+		mode,
+		rows,
+	)
+}
+
+func (adapter *postgresTargetAdapter) WriteStage4NetworkCanonicalRebuildBatch(
+	ctx context.Context,
+	sourceEngine string,
+	table schema.Table,
+	columns []string,
+	mode NetworkWriteMode,
+	rows [][]any,
+) (WriteReceipt, error) {
+	attempted := int64(len(rows))
+	if adapter == nil {
+		return WriteReceipt{
+				Certainty:     CommitNotCommitted,
+				AttemptedRows: attempted,
+			}, NewTransferError(
+				ErrorClassState,
+				fmt.Errorf("PostgreSQL Stage 4 rebuild target adapter is not configured"),
+			)
+	}
+	writer, ok := adapter.batchWriter.(postgresStage4NetworkCanonicalRebuildBatchWriter)
+	if !ok || isNilInterface(writer) {
+		return adapter.WriteStage4NetworkRebuildBatch(
+			ctx,
+			table,
+			columns,
+			mode,
+			rows,
+		)
+	}
+	return writer.WriteStage4NetworkCanonicalRebuildBatch(
+		ctx,
+		sourceEngine,
+		adapter.hasStage4NetworkRebuildSetFence(table),
 		table,
 		columns,
 		mode,

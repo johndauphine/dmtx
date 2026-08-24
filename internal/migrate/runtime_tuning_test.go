@@ -149,6 +149,38 @@ func TestRuntimeTuningPressureAndWriteErrorsReduceOnlyAtBoundaries(
 	)
 }
 
+func TestRuntimeTuningQueuePressurePreservesBatching(t *testing.T) {
+	t.Parallel()
+
+	plan := runtimeTuningTestPlan()
+	plan.ChunkRows.Value = 128
+	plan.Writers.Value = 4
+	plan.QueueDepth.Value = 4
+	limits := runtimeTuningTestLimits()
+	controller := mustRuntimeTuningController(t, plan, limits)
+	builder := newRuntimeObservationBuilder(plan, limits)
+
+	observation := builder.next(controller)
+	observation.QueuePressure = true
+	if _, err := controller.ApplyChunkBoundary(
+		context.Background(),
+		observation,
+	); err != nil {
+		t.Fatal(err)
+	}
+	effective := controller.Snapshot().Effective
+	if effective.ChunkRows.Value != 128 ||
+		effective.Writers.Value != 4 ||
+		effective.BufferDepth.Value != 4 {
+		t.Fatalf("queue pressure changed batching: %#v", effective)
+	}
+	assertRuntimeDecisionReasons(
+		t,
+		controller.History()[0],
+		RuntimeReasonQueuePressure,
+	)
+}
+
 func TestRuntimeTuningIntervalGatesGrowthButNeverSafetyReduction(
 	t *testing.T,
 ) {

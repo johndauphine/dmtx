@@ -434,6 +434,8 @@ func executeRun(ctx context.Context, request Request, progress *progressReporter
 	if err != nil {
 		return out.failWith(StateError, "state backend: "+err.Error())
 	}
+	store, closeStateBackend := state.WithPersistentSQLiteBackend(store)
+	defer func() { _ = closeStateBackend() }()
 	started := time.Now().UTC()
 	runID := started.Format("20060102T150405.000000000Z")
 	operatorTerminal := operatorSummary(runID, "run", cfg, started)

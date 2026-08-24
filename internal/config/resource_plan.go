@@ -103,7 +103,9 @@ const (
 	MaxTransferReaders               = 16
 	MaxTransferWriters               = 8
 	MaxTransferQueueDepth            = 64
-	MaxTransferChunkRows             = 10_000
+	// MaxTransferChunkRows is a representation bound, not a page-size policy.
+	// The effective page ceiling is derived from the retained-byte budget.
+	MaxTransferChunkRows = int(^uint32(0) >> 1)
 )
 
 // ResolveSystemEffectiveTransferPlan resolves a plan with the platform memory

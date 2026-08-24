@@ -26,7 +26,11 @@ func normalizePostgresRows(
 	for _, column := range table.Columns {
 		tableColumns[column.Name] = column
 	}
-	ordered := make([]schema.Column, len(columns))
+	type preparedColumn struct {
+		column    schema.Column
+		normalize func(any) (any, error)
+	}
+	ordered := make([]preparedColumn, len(columns))
 	for index, name := range columns {
 		column, ok := tableColumns[name]
 		if !ok {
@@ -36,9 +40,25 @@ func normalizePostgresRows(
 				name,
 			)
 		}
-		ordered[index] = column
+		normalize, err := preparePostgresColumnNormalizer(column)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"normalize PostgreSQL table %s column %s as %s: %w",
+				table.Name,
+				column.Name,
+				strings.ToLower(strings.TrimSpace(column.Type)),
+				err,
+			)
+		}
+		ordered[index] = preparedColumn{
+			column:    column,
+			normalize: normalize,
+		}
 	}
 
+	// The write callback borrows an immutable network page. Keep normalization
+	// in a separate graph so a failed target attempt cannot alter the source
+	// values subsequently used by a retry or replay check.
 	normalized := make([][]any, len(rows))
 	for rowIndex, row := range rows {
 		if len(row) != len(columns) {
@@ -52,7 +72,8 @@ func normalizePostgresRows(
 		}
 		normalized[rowIndex] = make([]any, len(row))
 		for columnIndex, value := range row {
-			column := ordered[columnIndex]
+			prepared := ordered[columnIndex]
+			column := prepared.column
 			if value == nil {
 				if !column.Nullable {
 					return nil, fmt.Errorf(
@@ -64,7 +85,7 @@ func normalizePostgresRows(
 				}
 				continue
 			}
-			converted, err := normalizePostgresColumnValue(column, value)
+			converted, err := prepared.normalize(value)
 			if err != nil {
 				return nil, fmt.Errorf(
 					"normalize PostgreSQL table %s row %d column %s as %s: %w",
@@ -89,112 +110,156 @@ func normalizePostgresValue(columnType string, value any) (any, error) {
 }
 
 func normalizePostgresColumnValue(column schema.Column, value any) (any, error) {
+	normalize, err := preparePostgresColumnNormalizer(column)
+	if err != nil {
+		return nil, err
+	}
+	return normalize(value)
+}
+
+// preparePostgresColumnNormalizer resolves schema-dependent conversion once
+// per COPY page. The former cell-at-a-time dispatch repeatedly normalized the
+// same type name and reparsed the same modifiers for every value; that cost is
+// material for multi-million-row rebuilds.
+func preparePostgresColumnNormalizer(
+	column schema.Column,
+) (func(any) (any, error), error) {
 	columnType := strings.ToLower(strings.TrimSpace(column.Type))
 	switch columnType {
 	case "int", "integer", "int4":
-		integer, err := exactPostgresInteger(value)
-		if err != nil || !integer.IsInt64() {
-			return nil, fmt.Errorf("expected a signed 32-bit integer")
-		}
-		number := integer.Int64()
-		if number < math.MinInt32 || number > math.MaxInt32 {
-			return nil, fmt.Errorf("integer is outside the signed 32-bit range")
-		}
-		return int32(number), nil
+		return func(value any) (any, error) {
+			number, err := exactPostgresInt64(value)
+			if err != nil {
+				return nil, fmt.Errorf("expected a signed 32-bit integer")
+			}
+			if number < math.MinInt32 || number > math.MaxInt32 {
+				return nil, fmt.Errorf("integer is outside the signed 32-bit range")
+			}
+			return int32(number), nil
+		}, nil
 	case "bigint", "int8":
-		integer, err := exactPostgresInteger(value)
-		if err != nil || !integer.IsInt64() {
-			return nil, fmt.Errorf("expected a signed 64-bit integer")
-		}
-		return integer.Int64(), nil
+		return func(value any) (any, error) {
+			number, err := exactPostgresInt64(value)
+			if err != nil {
+				return nil, fmt.Errorf("expected a signed 64-bit integer")
+			}
+			return number, nil
+		}, nil
 	case "real", "float4":
-		return normalizePostgresReal(value)
+		return func(value any) (any, error) { return normalizePostgresReal(value) }, nil
 	case "float", "double", "double precision", "float8":
-		return normalizePostgresFloat(value)
+		return func(value any) (any, error) { return normalizePostgresFloat(value) }, nil
 	case "decimal", "numeric":
 		precision, scale, err := postgresNumericColumnModifiers(column)
 		if err != nil {
 			return nil, err
 		}
-		return normalizePostgresNumericWithModifiers(
-			value,
-			precision,
-			scale,
-		)
+		return func(value any) (any, error) {
+			return normalizePostgresNumericWithModifiers(value, precision, scale)
+		}, nil
 	case "text", "char", "character", "varchar", "character varying":
-		normalized, err := normalizePostgresText(value)
-		if err != nil {
-			return nil, err
-		}
 		length, constrained, err := postgresCharacterColumnLength(column)
 		if err != nil {
 			return nil, err
 		}
-		if constrained && utf8.RuneCountInString(normalized) > length {
-			return nil, fmt.Errorf(
-				"text exceeds PostgreSQL character length %d",
-				length,
-			)
-		}
-		return normalized, nil
+		return func(value any) (any, error) {
+			normalized, err := normalizePostgresText(value)
+			if err != nil {
+				return nil, err
+			}
+			if constrained && utf8.RuneCountInString(normalized) > length {
+				return nil, fmt.Errorf(
+					"text exceeds PostgreSQL character length %d",
+					length,
+				)
+			}
+			return normalized, nil
+		}, nil
 	case "uuid":
-		return normalizePostgresUUID(value)
+		return func(value any) (any, error) { return normalizePostgresUUID(value) }, nil
 	case "blob", "binary", "varbinary", "bytea":
-		bytes, ok := value.([]byte)
-		if !ok {
-			return nil, fmt.Errorf("expected binary bytes")
-		}
-		owned := make([]byte, len(bytes))
-		copy(owned, bytes)
-		return owned, nil
+		return func(value any) (any, error) {
+			bytes, ok := value.([]byte)
+			if !ok {
+				return nil, fmt.Errorf("expected binary bytes")
+			}
+			owned := make([]byte, len(bytes))
+			copy(owned, bytes)
+			return owned, nil
+		}, nil
 	case "json", "jsonb":
-		return normalizePostgresJSON(value)
+		return func(value any) (any, error) { return normalizePostgresJSON(value) }, nil
 	case "bool", "boolean":
-		return normalizePostgresBoolean(value)
+		return func(value any) (any, error) { return normalizePostgresBoolean(value) }, nil
 	case "timestamp", "datetime":
-		normalized, err := normalizePostgresTimestamp(value)
+		precision, constrained, err := postgresTemporalColumnPrecision(column)
 		if err != nil {
 			return nil, err
 		}
-		if err := validatePostgresTemporalPrecision(
-			column,
-			normalized.Time,
-		); err != nil {
-			return nil, err
-		}
-		return normalized, nil
+		return func(value any) (any, error) {
+			normalized, err := normalizePostgresTimestamp(value)
+			if err != nil {
+				return nil, err
+			}
+			if constrained && !postgresNanosecondsFitPrecision(normalized.Time.Nanosecond(), precision) {
+				return nil, fmt.Errorf("timestamp exceeds PostgreSQL fractional-second precision %d", precision)
+			}
+			return normalized, nil
+		}, nil
 	case "timestamptz":
-		normalized, err := normalizePostgresTimestamptz(value)
+		precision, constrained, err := postgresTemporalColumnPrecision(column)
 		if err != nil {
 			return nil, err
 		}
-		if err := validatePostgresTemporalPrecision(
-			column,
-			normalized.Time,
-		); err != nil {
-			return nil, err
-		}
-		return normalized, nil
+		return func(value any) (any, error) {
+			normalized, err := normalizePostgresTimestamptz(value)
+			if err != nil {
+				return nil, err
+			}
+			if constrained && !postgresNanosecondsFitPrecision(normalized.Time.Nanosecond(), precision) {
+				return nil, fmt.Errorf("timestamp exceeds PostgreSQL fractional-second precision %d", precision)
+			}
+			return normalized, nil
+		}, nil
 	case "time":
-		normalized, err := normalizePostgresTime(value)
+		precision, constrained, err := postgresTimeColumnPrecision(column)
 		if err != nil {
 			return nil, err
 		}
-		if err := validatePostgresTimePrecision(
-			column,
-			normalized.Microseconds,
-		); err != nil {
-			return nil, err
-		}
-		return normalized, nil
+		return func(value any) (any, error) {
+			normalized, err := normalizePostgresTime(value)
+			if err != nil {
+				return nil, err
+			}
+			if constrained && !postgresMicrosecondsFitPrecision(normalized.Microseconds, precision) {
+				return nil, fmt.Errorf("time exceeds PostgreSQL fractional-second precision %d", precision)
+			}
+			return normalized, nil
+		}, nil
 	case "date":
-		return normalizePostgresDate(value)
+		return func(value any) (any, error) { return normalizePostgresDate(value) }, nil
 	default:
 		return nil, fmt.Errorf(
 			"unsupported canonical PostgreSQL source type %q",
 			columnType,
 		)
 	}
+}
+
+func postgresNanosecondsFitPrecision(nanoseconds int, precision int) bool {
+	unit := 1
+	for digits := precision; digits < 9; digits++ {
+		unit *= 10
+	}
+	return nanoseconds%unit == 0
+}
+
+func postgresMicrosecondsFitPrecision(microseconds int64, precision int) bool {
+	unit := int64(1)
+	for digits := precision; digits < 6; digits++ {
+		unit *= 10
+	}
+	return microseconds%unit == 0
 }
 
 func postgresCharacterColumnLength(
@@ -283,27 +348,6 @@ func postgresTemporalColumnPrecision(
 	return precision, true, nil
 }
 
-func validatePostgresTemporalPrecision(
-	column schema.Column,
-	value time.Time,
-) error {
-	precision, constrained, err := postgresTemporalColumnPrecision(column)
-	if err != nil || !constrained {
-		return err
-	}
-	unit := 1
-	for digits := precision; digits < 9; digits++ {
-		unit *= 10
-	}
-	if value.Nanosecond()%unit != 0 {
-		return fmt.Errorf(
-			"timestamp exceeds PostgreSQL fractional-second precision %d",
-			precision,
-		)
-	}
-	return nil
-}
-
 func postgresTimeColumnPrecision(
 	column schema.Column,
 ) (int, bool, error) {
@@ -325,27 +369,6 @@ func postgresTimeColumnPrecision(
 		)
 	}
 	return precision, true, nil
-}
-
-func validatePostgresTimePrecision(
-	column schema.Column,
-	microseconds int64,
-) error {
-	precision, constrained, err := postgresTimeColumnPrecision(column)
-	if err != nil || !constrained {
-		return err
-	}
-	unit := int64(1)
-	for digits := precision; digits < 6; digits++ {
-		unit *= 10
-	}
-	if microseconds%unit != 0 {
-		return fmt.Errorf(
-			"time exceeds PostgreSQL fractional-second precision %d",
-			precision,
-		)
-	}
-	return nil
 }
 
 func exactPostgresInteger(value any) (*big.Int, error) {
@@ -377,6 +400,58 @@ func exactPostgresInteger(value any) (*big.Int, error) {
 	default:
 		return nil, fmt.Errorf("expected an exact integer")
 	}
+}
+
+// exactPostgresInt64 is the allocation-free integer path used by PostgreSQL
+// int4/int8 COPY columns. Numeric/decimal conversion retains the arbitrary-
+// precision helper above, but ordinary SQL Server integer values should not
+// allocate a big.Int for every cell.
+func exactPostgresInt64(value any) (int64, error) {
+	switch number := value.(type) {
+	case int:
+		return int64(number), nil
+	case int8:
+		return int64(number), nil
+	case int16:
+		return int64(number), nil
+	case int32:
+		return int64(number), nil
+	case int64:
+		return number, nil
+	case uint:
+		if uint64(number) > math.MaxInt64 {
+			return 0, fmt.Errorf("expected an exact signed integer")
+		}
+		return int64(number), nil
+	case uint8:
+		return int64(number), nil
+	case uint16:
+		return int64(number), nil
+	case uint32:
+		return int64(number), nil
+	case uint64:
+		if number > math.MaxInt64 {
+			return 0, fmt.Errorf("expected an exact signed integer")
+		}
+		return int64(number), nil
+	case string:
+		return parsePostgresInt64(number)
+	case []byte:
+		return parsePostgresInt64(string(number))
+	default:
+		return 0, fmt.Errorf("expected an exact signed integer")
+	}
+}
+
+func parsePostgresInt64(value string) (int64, error) {
+	if !isSignedDecimalDigits(value) {
+		return 0, fmt.Errorf("expected an exact signed integer")
+	}
+	integer, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("expected an exact signed integer")
+	}
+	return integer, nil
 }
 
 func parsePostgresInteger(value string) (*big.Int, error) {

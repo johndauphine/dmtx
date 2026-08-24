@@ -804,7 +804,7 @@ func sqlServerSourceColumnFromCatalog(
 	}
 	if column.Nullable ||
 		column.Default != nil ||
-		catalog.typeName != "bigint" ||
+		(catalog.typeName != "int" && catalog.typeName != "bigint") ||
 		!catalog.identitySeed.Valid ||
 		catalog.identitySeed.Int64 != 1 ||
 		!catalog.identityIncrement.Valid ||
@@ -962,7 +962,7 @@ func applySQLServerSourceType(
 		if !noCollation() ||
 			catalog.ansiPadded ||
 			catalog.scale < 0 ||
-			catalog.scale > 6 ||
+			catalog.scale > 7 ||
 			catalog.precision != sqlServerTemporalPrecision(
 				"datetime2",
 				catalog.scale,
@@ -974,7 +974,16 @@ func applySQLServerSourceType(
 			return unsupported()
 		}
 		column.Type = "datetime"
-		declaration("timestamp", catalog.scale)
+		precision := catalog.scale
+		if precision == 7 {
+			// SQL Server stores DATETIME2(7) in 100ns units, while PostgreSQL
+			// TIMESTAMP stops at microseconds. The source-row adapter therefore
+			// rejects any value whose seventh digit is nonzero; mapping the
+			// certified, microsecond-aligned subset as TIMESTAMP(6) preserves
+			// every value that can reach the target without truncation.
+			precision = 6
+		}
+		declaration("timestamp", precision)
 	case "datetime":
 		// SQL Server's original DATETIME. Not parameterised, fixed 8 bytes,
 		// and the catalog reports precision 23 scale 3 for every one of them.
@@ -1412,7 +1421,7 @@ func applySQLServerSourceIdentity(
 			column.Nullable ||
 			column.Default != nil ||
 			column.DeclaredType == nil ||
-			column.DeclaredType.Base != "bigint" ||
+			!sqlServerSourceIdentityColumnType(column) ||
 			len(column.DeclaredType.Arguments) != 0 {
 			break
 		}
@@ -1427,6 +1436,25 @@ func applySQLServerSourceIdentity(
 		"identity",
 		table.Schema+"."+table.Name+"."+catalog.column,
 	)
+}
+
+// sqlServerSourceIdentityColumnType admits SQL Server's two exact signed
+// identity widths that DMTX can carry through its int64 frontier and keyset
+// cursor. The target keeps the source width, so smaller integer identities
+// remain rejected rather than being silently widened by identity lifecycle
+// code that has not certified their sequence bounds.
+func sqlServerSourceIdentityColumnType(column schema.Column) bool {
+	if column.DeclaredType == nil {
+		return false
+	}
+	switch column.DeclaredType.Base {
+	case "int":
+		return column.Type == "integer"
+	case "bigint":
+		return column.Type == "bigint"
+	default:
+		return false
+	}
 }
 
 func orderedSQLServerPrimaryKeyColumns(

@@ -19,10 +19,52 @@ type LeaseGuard struct {
 	store SQLiteStore
 	lease Lease
 	mu    sync.Mutex
+
+	coordinatorOnce  sync.Once
+	coordinator      *sql.DB
+	coordinatorErr   error
+	leaseOnce        sync.Once
+	leaseDatabase    *sql.DB
+	leaseDatabaseErr error
+
+	targetMu         sync.Mutex
+	targetProtection *leaseTargetProtection
+	targetClosing    bool
+	targetErr        error
+}
+
+// leaseTargetProtection coalesces overlapping target writes beneath one
+// ownership transaction. The sidecar coordinator remains locked for the complete
+// cohort, while the writes themselves are free to use independent target
+// connections concurrently.
+type leaseTargetProtection struct {
+	connection *sql.Conn
+	active     int
+	closing    bool
+	done       chan struct{}
+	err        error
 }
 
 func NewLeaseGuard(store SQLiteStore, lease Lease) *LeaseGuard {
 	return &LeaseGuard{store: store, lease: lease}
+}
+
+// openCoordinator reuses the separate rollback-journal lease fence for the
+// lifetime of the guard. Protected target and state operations take compatible
+// shared locks here, while a lease acquisition must take an exclusive lock.
+func (guard *LeaseGuard) openCoordinator() (*sql.DB, error) {
+	guard.coordinatorOnce.Do(func() {
+		guard.coordinator, guard.coordinatorErr =
+			guard.store.openLeaseCoordinator()
+	})
+	return guard.coordinator, guard.coordinatorErr
+}
+
+func (guard *LeaseGuard) openLeaseDatabase() (*sql.DB, error) {
+	guard.leaseOnce.Do(func() {
+		guard.leaseDatabase, guard.leaseDatabaseErr = guard.store.Open()
+	})
+	return guard.leaseDatabase, guard.leaseDatabaseErr
 }
 
 func (guard *LeaseGuard) Lease() Lease {
@@ -42,33 +84,32 @@ func (guard *LeaseGuard) Protect(ctx context.Context, operation func() error) (e
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
 
-	database, err := guard.store.Open()
+	database, err := guard.openCoordinator()
 	if err != nil {
 		return fmt.Errorf("%w: open lease coordinator: %v", ErrLeaseLost, err)
 	}
-	defer database.Close()
-	connection, err := database.Conn(ctx)
+	connection, err := beginLeaseFence(ctx, database, false)
 	if err != nil {
-		return fmt.Errorf("%w: acquire lease coordinator: %v", ErrLeaseLost, err)
-	}
-	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("%w: lock lease coordinator: %v", ErrLeaseLost, err)
 	}
 	locked := true
 	defer func() {
 		if locked {
-			_, rollbackErr := connection.ExecContext(context.Background(), `ROLLBACK`)
+			rollbackErr := finishLeaseFence(connection, false)
 			if rollbackErr != nil {
 				err = errors.Join(err, fmt.Errorf("release lease coordinator: %w", rollbackErr))
 			}
 		}
 	}()
 
+	leaseDatabase, err := guard.openLeaseDatabase()
+	if err != nil {
+		return fmt.Errorf("%w: open lease database: %v", ErrLeaseLost, err)
+	}
 	var ownerToken string
 	var runID string
 	var generation int64
-	queryErr := connection.QueryRowContext(ctx,
+	queryErr := leaseDatabase.QueryRowContext(ctx,
 		`SELECT run_id, owner_token, generation FROM leases WHERE target = ?`,
 		guard.lease.Target,
 	).Scan(&runID, &ownerToken, &generation)
@@ -84,11 +125,152 @@ func (guard *LeaseGuard) Protect(ctx context.Context, operation func() error) (e
 	if err := operation(); err != nil {
 		return err
 	}
-	if _, err := connection.ExecContext(ctx, `COMMIT`); err != nil {
+	if err := finishLeaseFence(connection, true); err != nil {
 		return fmt.Errorf("%w: commit lease coordinator: %v", ErrLeaseLost, err)
 	}
 	locked = false
 	return nil
+}
+
+// ProtectConcurrent holds target ownership across an overlapping cohort of
+// durable target writes. Unlike Protect, it does not serialize the protected
+// operations: the first caller acquires the canonical lease transaction,
+// concurrent callers join it, and the last caller releases it. A completed
+// caller returns while overlapping members retain the same proof, allowing a
+// writer to take its next page without imposing a batch barrier. A takeover
+// still cannot interleave with any protected operation.
+func (guard *LeaseGuard) ProtectConcurrent(
+	ctx context.Context,
+	operation func() error,
+) error {
+	if guard == nil || operation == nil {
+		return fmt.Errorf("%w: missing lease guard or operation", ErrLeaseLost)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		guard.targetMu.Lock()
+		if guard.targetClosing {
+			guard.targetMu.Unlock()
+			return fmt.Errorf("%w: lease guard is releasing", ErrLeaseLost)
+		}
+		protection := guard.targetProtection
+		if protection == nil {
+			started, err := guard.beginTargetProtection(ctx)
+			if err != nil {
+				guard.targetMu.Unlock()
+				return err
+			}
+			guard.targetProtection = started
+			protection = started
+		} else if protection.closing {
+			done := protection.done
+			guard.targetMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-done:
+			}
+			continue
+		} else {
+			protection.active++
+		}
+		guard.targetMu.Unlock()
+
+		operationErr := operation()
+		return guard.finishTargetProtection(protection, operationErr, false)
+	}
+}
+
+func (guard *LeaseGuard) beginTargetProtection(
+	ctx context.Context,
+) (*leaseTargetProtection, error) {
+	database, err := guard.openCoordinator()
+	if err != nil {
+		return nil, fmt.Errorf("%w: open lease coordinator: %v", ErrLeaseLost, err)
+	}
+	connection, err := beginLeaseFence(ctx, database, false)
+	if err != nil {
+		return nil, fmt.Errorf("%w: lock lease coordinator: %v", ErrLeaseLost, err)
+	}
+	fail := func(value error) (*leaseTargetProtection, error) {
+		_ = finishLeaseFence(connection, false)
+		return nil, value
+	}
+	leaseDatabase, err := guard.openLeaseDatabase()
+	if err != nil {
+		return fail(fmt.Errorf("%w: open lease database: %v", ErrLeaseLost, err))
+	}
+
+	var ownerToken string
+	var runID string
+	var generation int64
+	queryErr := leaseDatabase.QueryRowContext(ctx,
+		`SELECT run_id, owner_token, generation FROM leases WHERE target = ?`,
+		guard.lease.Target,
+	).Scan(&runID, &ownerToken, &generation)
+	if queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return fail(fmt.Errorf(
+				"%w: target=%q generation=%d",
+				ErrLeaseLost, guard.lease.Target, guard.lease.Generation,
+			))
+		}
+		return fail(fmt.Errorf("%w: verify target ownership: %v", ErrLeaseLost, queryErr))
+	}
+	if runID != guard.lease.RunID ||
+		ownerToken != guard.lease.OwnerToken ||
+		generation != guard.lease.Generation {
+		return fail(fmt.Errorf(
+			"%w: target=%q generation=%d",
+			ErrLeaseLost, guard.lease.Target, guard.lease.Generation,
+		))
+	}
+	return &leaseTargetProtection{
+		connection: connection,
+		active:     1,
+		done:       make(chan struct{}),
+	}, nil
+}
+
+func (guard *LeaseGuard) finishTargetProtection(
+	protection *leaseTargetProtection,
+	operationErr error,
+	waitForCohort bool,
+) error {
+	guard.targetMu.Lock()
+	protection.active--
+	if protection.active > 0 {
+		if !waitForCohort {
+			guard.targetMu.Unlock()
+			return operationErr
+		}
+		done := protection.done
+		guard.targetMu.Unlock()
+		<-done
+		return errors.Join(operationErr, protection.err)
+	}
+	protection.closing = true
+	guard.targetMu.Unlock()
+
+	commitErr := finishLeaseFence(protection.connection, true)
+	if commitErr != nil {
+		commitErr = fmt.Errorf("%w: commit lease coordinator: %v", ErrLeaseLost, commitErr)
+	}
+	protectionErr := commitErr
+
+	guard.targetMu.Lock()
+	protection.err = protectionErr
+	guard.targetErr = errors.Join(guard.targetErr, protectionErr)
+	guard.targetProtection = nil
+	close(protection.done)
+	guard.targetMu.Unlock()
+	return errors.Join(operationErr, protectionErr)
 }
 
 func (guard *LeaseGuard) Renew() error {
@@ -109,8 +291,36 @@ func (guard *LeaseGuard) Release() error {
 	}
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
-	if err := guard.store.ReleaseLease(guard.lease); err != nil {
-		return fmt.Errorf("%w: %v", ErrLeaseLost, err)
+	guard.targetMu.Lock()
+	guard.targetClosing = true
+	protection := guard.targetProtection
+	guard.targetMu.Unlock()
+	if protection != nil {
+		<-protection.done
+	}
+	guard.targetMu.Lock()
+	protectionErr := guard.targetErr
+	if protection != nil && protection.err != nil &&
+		!errors.Is(protectionErr, protection.err) {
+		protectionErr = errors.Join(protectionErr, protection.err)
+	}
+	guard.targetMu.Unlock()
+	releaseErr := guard.store.ReleaseLease(guard.lease)
+	var coordinatorCloseErr error
+	if guard.coordinator != nil {
+		coordinatorCloseErr = guard.coordinator.Close()
+	}
+	var leaseCloseErr error
+	if guard.leaseDatabase != nil {
+		leaseCloseErr = guard.leaseDatabase.Close()
+	}
+	if err := errors.Join(
+		protectionErr,
+		releaseErr,
+		coordinatorCloseErr,
+		leaseCloseErr,
+	); err != nil {
+		return fmt.Errorf("%w: %w", ErrLeaseLost, err)
 	}
 	return nil
 }

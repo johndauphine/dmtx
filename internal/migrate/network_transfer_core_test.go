@@ -2066,7 +2066,7 @@ func TestResumableNetworkTransferSharesOneByteBudgetAcrossReaders(
 		result.Memory.Limit != memory ||
 		result.Memory.Peak != memory ||
 		result.Memory.Current != 0 ||
-		maxReaders.Load() != 1 ||
+		maxReaders.Load() != 2 ||
 		activeReaders.Load() != 0 {
 		t.Fatalf(
 			"result=%#v maxReaders=%d activeReaders=%d",

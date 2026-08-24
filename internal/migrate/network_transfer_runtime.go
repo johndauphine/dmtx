@@ -43,9 +43,20 @@ func RunResumableNetworkTransfer(
 	if err != nil {
 		return NetworkTransferResult{}, err
 	}
-	budget, err := NewByteBudget(plan.Resources.MemoryBudget.Value)
-	if err != nil {
-		return NetworkTransferResult{}, err
+	budget := plan.SharedBudget
+	ownsBudget := budget == nil
+	if ownsBudget {
+		budget, err = NewByteBudget(plan.Resources.MemoryBudget.Value)
+		if err != nil {
+			return NetworkTransferResult{}, err
+		}
+	} else if stats := budget.Stats(); stats.Limit != plan.Resources.MemoryBudget.Value {
+		return NetworkTransferResult{}, fmt.Errorf(
+			"%w: shared memory budget limit=%d plan=%d",
+			ErrInvalidNetworkTransferPlan,
+			stats.Limit,
+			plan.Resources.MemoryBudget.Value,
+		)
 	}
 	runtime := &networkTransferRuntime{
 		plan:       plan,
@@ -164,7 +175,7 @@ func RunResumableNetworkTransfer(
 	writers.Wait()
 
 	result, resultErr := runtime.result(states)
-	if stats := budget.Stats(); stats.Current != 0 {
+	if stats := budget.Stats(); ownsBudget && stats.Current != 0 {
 		leak := NewTransferError(
 			ErrorClassState,
 			fmt.Errorf(

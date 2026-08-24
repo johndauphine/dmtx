@@ -12,6 +12,8 @@ import (
 	_ "github.com/microsoft/go-mssqldb"
 )
 
+const sqlServerEncryptedPacketSize = 16383
+
 // SQLServerCatalogQueryer is the read-only catalog surface used by SQL Server
 // table discovery. Both *sql.DB and *sql.Tx implement it so retained-target
 // replay proofs can run the exact discovery contract under their table lock.
@@ -40,6 +42,10 @@ func SQLServerDSN(endpoint config.Endpoint) (string, error) {
 	query.Set("encrypt", "true")
 	query.Set("guid conversion", "true")
 	query.Set("tlsmin", "1.2")
+	// go-mssqldb defaults to 4 KiB TDS packets. SQL Server caps encrypted
+	// sessions at 16,383 bytes, so request that exact ceiling to avoid excess
+	// TLS records and syscalls on wide-row transfers.
+	query.Set("packet size", strconv.Itoa(sqlServerEncryptedPacketSize))
 	if endpoint.TLSCAFile != "" {
 		query.Set("certificate", endpoint.TLSCAFile)
 	}

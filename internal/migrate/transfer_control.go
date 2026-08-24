@@ -84,9 +84,9 @@ func (b *ByteBudget) Acquire(ctx context.Context, exactBytes int64) (*ByteReserv
 				b.peak = b.current
 			}
 			reservation := &ByteReservation{
-				budget:   b,
-				bytes:    exactBytes,
-				released: make(chan struct{}),
+				budget: b,
+				bytes:  exactBytes,
+				done:   make(chan struct{}),
 			}
 			b.mu.Unlock()
 
@@ -145,9 +145,9 @@ func (b *ByteBudget) TryAcquire(ctx context.Context, exactBytes int64) (*ByteRes
 		b.peak = b.current
 	}
 	reservation := &ByteReservation{
-		budget:   b,
-		bytes:    exactBytes,
-		released: make(chan struct{}),
+		budget: b,
+		bytes:  exactBytes,
+		done:   make(chan struct{}),
 	}
 	b.mu.Unlock()
 
@@ -188,9 +188,10 @@ func (b *ByteBudget) adjustedChunkRows(
 // ByteReservation owns bytes admitted by a ByteBudget.
 type ByteReservation struct {
 	budget   *ByteBudget
+	mu       sync.Mutex
 	bytes    int64
-	once     sync.Once
-	released chan struct{}
+	released bool
+	done     chan struct{}
 }
 
 // Bytes returns the exact number of bytes owned by the reservation.
@@ -198,7 +199,48 @@ func (r *ByteReservation) Bytes() int64 {
 	if r == nil {
 		return 0
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.bytes
+}
+
+// ShrinkTo releases the unused part of a conservative pre-read reservation
+// after the source has measured the exact retained page payload. It never
+// grows a reservation, so source materialization remains bounded by the
+// original proven maximum while queued pages consume only the bytes they
+// actually retain.
+func (r *ByteReservation) ShrinkTo(exactBytes int64) error {
+	if r == nil {
+		return fmt.Errorf("%w: nil reservation", ErrInvalidByteRequest)
+	}
+	if exactBytes < 0 {
+		return fmt.Errorf("%w: bytes must be non-negative", ErrInvalidByteRequest)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.released {
+		return fmt.Errorf("%w: reservation is released", ErrInvalidByteRequest)
+	}
+	if exactBytes > r.bytes {
+		return fmt.Errorf(
+			"%w: retained bytes=%d reservation=%d",
+			ErrInvalidByteRequest,
+			exactBytes,
+			r.bytes,
+		)
+	}
+	releasedBytes := r.bytes - exactBytes
+	if releasedBytes == 0 {
+		return nil
+	}
+	r.budget.mu.Lock()
+	r.budget.current -= releasedBytes
+	r.bytes = exactBytes
+	changed := r.budget.changed
+	r.budget.changed = make(chan struct{})
+	close(changed)
+	r.budget.mu.Unlock()
+	return nil
 }
 
 // Release returns the reservation to its budget. It is safe to call more than
@@ -207,22 +249,27 @@ func (r *ByteReservation) Release() {
 	if r == nil {
 		return
 	}
-	r.once.Do(func() {
-		r.budget.mu.Lock()
-		r.budget.current -= r.bytes
-		changed := r.budget.changed
-		r.budget.changed = make(chan struct{})
-		close(changed)
-		r.budget.mu.Unlock()
-		close(r.released)
-	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.released {
+		return
+	}
+	r.budget.mu.Lock()
+	r.budget.current -= r.bytes
+	changed := r.budget.changed
+	r.budget.changed = make(chan struct{})
+	close(changed)
+	r.budget.mu.Unlock()
+	r.bytes = 0
+	r.released = true
+	close(r.done)
 }
 
 func (r *ByteReservation) releaseOnCancellation(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		r.Release()
-	case <-r.released:
+	case <-r.done:
 	}
 }
 

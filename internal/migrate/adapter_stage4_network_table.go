@@ -313,6 +313,7 @@ func (execution *stage4AdapterNetworkTableExecution) callbacks(
 				execution.parent.target,
 				execution.ranges,
 				execution.corePlan.ReplayMode,
+				execution.corePlan.SourceEngine,
 				request,
 			)
 			observeFallbackEvents(observer, execution.parent.target)

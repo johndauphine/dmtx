@@ -265,6 +265,7 @@ func writeStage4AdapterNetworkPage(
 	target targetAdapter,
 	ranges []stage4AdapterNetworkRange,
 	replayMode NetworkReplayMode,
+	sourceEngine string,
 	request NetworkWriteRequest,
 ) (WriteReceipt, error) {
 	failed := networkStateFailedReceipt(request)
@@ -338,13 +339,26 @@ func writeStage4AdapterNetworkPage(
 				),
 			)
 		}
-		receipt, writeErr = rebuildTarget.WriteStage4NetworkRebuildBatch(
-			ctx,
-			binding.plan.target,
-			binding.plan.columns,
-			request.Mode,
-			request.Rows,
-		)
+		canonical, canonicalOK := target.(adapterStage4NetworkCanonicalRebuildTarget)
+		if canonicalOK && !isNilInterface(canonical) {
+			receipt, writeErr = canonical.
+				WriteStage4NetworkCanonicalRebuildBatch(
+					ctx,
+					sourceEngine,
+					binding.plan.target,
+					binding.plan.columns,
+					request.Mode,
+					request.Rows,
+				)
+		} else {
+			receipt, writeErr = rebuildTarget.WriteStage4NetworkRebuildBatch(
+				ctx,
+				binding.plan.target,
+				binding.plan.columns,
+				request.Mode,
+				request.Rows,
+			)
+		}
 	default:
 		return failed, NewTransferError(
 			ErrorClassPolicy,
