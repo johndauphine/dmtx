@@ -655,7 +655,7 @@ function updateDashboardTelemetry() {
   const percent = total ? Math.round(done * 100 / total) : 0;
   const values = [["#dash-percent", total ? percent + "%" : "—"], ["#dash-tables", total ? done + " / " + total : "—"], ["#dash-rows", progressSnapshot.rows ? String(progressSnapshot.rows) : "—"], ["#dash-table", progressSnapshot.table || "—"]];
   values.forEach(([selector, value]) => { const target = document.querySelector(selector); if (target) target.textContent = value; });
-  const bar = document.querySelector("#dash-progress"); if (bar) bar.style.width = percent + "%";
+  const bar = document.querySelector("#dash-progress"); if (bar && bar.style) bar.style.width = percent + "%";
   const progress = bar && bar.parentElement;
   if (progress) progress.setAttribute("aria-valuenow", String(percent));
   const phase = document.querySelector("#dash-phase"); if (phase) { phase.textContent = activeJob ? "running" : "idle"; phase.className = "badge " + (activeJob ? "run" : "idle"); }
