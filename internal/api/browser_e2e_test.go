@@ -90,7 +90,7 @@ func TestStage5BrowserE2E(t *testing.T) {
 		"source": sourcePath, "target": targetPath, "setup": setupPath,
 		"setupTarget": setupTargetPath, "cancelSetup": cancelSetupPath,
 	})
-	command := exec.CommandContext(t.Context(), node, filepath.Join(rootPath, "test", "browser", "stage5.cjs"), playwright, edge, string(input))
+	command := exec.CommandContext(t.Context(), node, filepath.Join(rootPath, "test", "browser", "stage5.cjs"), playwright, edge, string(input), os.Getenv("DMTX_STAGE5_HEADED"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("Edge acceptance: %v\n%s", err, output)
 	}

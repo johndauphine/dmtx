@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e819b">
   <title>DMTX Console</title>
   <link rel="stylesheet" href="/static/console.css">
   <link rel="manifest" href="/manifest.webmanifest">
@@ -10,23 +11,68 @@
   <script src="/static/console.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#command-workspace">Skip to command workspace</a>
   <main class="console-shell">
-    <header>
-      <h1>DMTX Console</h1>
-      <p id="command-summary">Loading commands…</p>
-    </header>
-    <section id="transcript" aria-label="Command transcript" aria-live="polite" aria-relevant="additions text"></section>
-    <output id="console-status" role="status" aria-live="polite" aria-atomic="true">Ready.</output>
-    <form id="command-form">
-      <label for="line">Command</label>
-      <div class="command-entry">
-        <span aria-hidden="true">›</span>
-        <input id="line" role="combobox" aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false" autocomplete="off" autofocus placeholder="/status --state state.db">
+    <aside class="sidebar" aria-label="Console navigation">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">×</span>
+        <span><strong>dmtx</strong><small>migration console</small></span>
       </div>
-      <div id="suggestions" role="listbox" aria-label="Command suggestions" hidden></div>
-      <button type="submit">Run</button>
-      <button id="cancel" type="button" disabled>Cancel job</button>
-    </form>
+      <p class="nav-label">Workspace</p>
+      <nav class="nav-actions" aria-label="Console shortcuts">
+        <button type="button" data-view="dashboard"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg>Dashboard</button>
+        <button type="button" data-view="history"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 4v4h4"/><path d="M12 7v5l3 2"/></svg>History</button>
+        <button type="button" data-view="checks"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12 4 4L19 6"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10"/></svg>Checks</button>
+        <button type="button" data-view="setup"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 12a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.2a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 10a2 2 0 1 1-1.6 5Z"/></svg>Setup</button>
+        <button type="button" data-view="profiles"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Profiles</button>
+        <button type="button" data-view="settings"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--panel)"/><circle cx="15" cy="12" r="2" fill="var(--panel)"/><circle cx="8" cy="18" r="2" fill="var(--panel)"/></svg>Settings</button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="eyebrow">Execution model</span>
+        <p>Every command is validated by DMTX before it can run.</p>
+      </div>
+      <div class="sidebar-footer">
+        <button id="theme-toggle" class="quiet-button" type="button">Toggle theme</button>
+        <span class="connection"><i aria-hidden="true"></i>Local, authenticated</span>
+      </div>
+    </aside>
+
+    <div class="console-main">
+      <header class="topbar">
+        <div><p class="eyebrow">Operations</p><h1 id="view-title">Dashboard</h1></div>
+        <div class="topbar-state" aria-label="Console state"><i aria-hidden="true"></i><span id="run-state">Ready</span></div>
+      </header>
+      <div class="content-wrap">
+        <section class="intro" aria-labelledby="workspace-title">
+          <div>
+            <p class="eyebrow">Migration control plane</p>
+            <h2 id="workspace-title">Run migrations with a complete audit trail.</h2>
+            <p id="workspace-description">Use commands for planning, execution, validation, and recovery. Live work stays attached across reloads.</p>
+          </div>
+          <div class="command-summary-card"><span class="eyebrow">Command registry</span><p id="command-summary">Loading commands…</p></div>
+        </section>
+        <section id="command-workspace" class="workspace" tabindex="-1" aria-label="Command workspace">
+          <div id="view" class="view"></div>
+          <aside class="activity-rail">
+            <div class="transcript-card">
+              <div class="panel-heading"><div><p class="eyebrow">Live activity</p><h2>Session transcript</h2></div><button id="clear-transcript" class="quiet-button" type="button">Clear</button></div>
+              <section id="transcript" aria-label="Command transcript" aria-live="polite" aria-relevant="additions text"></section>
+              <output id="console-status" role="status" aria-live="polite" aria-atomic="true">Ready.</output>
+            </div>
+            <section class="command-panel" aria-label="Command center">
+              <div class="panel-heading"><div><p class="eyebrow">Command center</p><h2>Direct command</h2></div></div>
+              <form id="command-form">
+                <label for="line">Command</label>
+                <div class="command-entry"><span class="prompt" aria-hidden="true">›</span><input id="line" role="combobox" aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false" autocomplete="off" placeholder="/status --state state.db"></div>
+                <div id="suggestions" role="listbox" aria-label="Command suggestions" hidden></div>
+                <div class="form-actions"><button class="run-button" type="submit">Run command <span aria-hidden="true">↵</span></button><button id="cancel" class="cancel-button" type="button" disabled>Cancel job</button></div>
+              </form>
+              <p class="command-hint"><kbd>↑</kbd> recall <kbd>Tab</kbd> complete <kbd>Esc</kbd> close suggestions</p>
+            </section>
+          </aside>
+        </section>
+      </div>
+    </div>
   </main>
 </body>
 </html>
