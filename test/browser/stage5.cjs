@@ -8,7 +8,13 @@ const options = JSON.parse(process.argv[4]);
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: edge, headless: true });
+  const headed = process.argv[5] === "1";
+  console.log("stage5 browser mode: " + (headed ? "headed" : "headless"));
+  const browser = await chromium.launch({
+    executablePath: edge,
+    headless: !headed,
+    slowMo: headed ? 350 : 0,
+  });
   const errors = [];
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -206,5 +212,6 @@ const assert = (ok, message) => { if (!ok) throw new Error(message); };
     const expiredErrors = errors.splice(expiredErrorStart);
     assert(expiredErrors.every(message => /401|unauthorized/i.test(message)), "auth expiry produced an unexpected browser error: " + expiredErrors.join("; "));
     assert(errors.length === 0, "browser console errors after auth expiry: " + errors.join("; "));
+    if (headed) await page.waitForTimeout(10000);
   } finally { await browser.close(); }
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

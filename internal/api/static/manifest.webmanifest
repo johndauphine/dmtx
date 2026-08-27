@@ -1,1 +1,1 @@
-{"name":"DMTX Console","short_name":"DMTX","start_url":"/","display":"standalone","background_color":"#101820","theme_color":"#101820","icons":[{"src":"/static/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{"name":"DMTX Console","short_name":"DMTX","description":"Database migration control panel for DMTX","start_url":"/","scope":"/","display":"standalone","background_color":"#f5f8fb","theme_color":"#0e819b","icons":[{"src":"/static/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}

@@ -7,9 +7,11 @@ const apiRoutes = Object.freeze({
   commands: "/api/v1/commands",
   parse: "/api/v1/parse",
   complete: "/api/v1/complete",
+  configs: "/api/v1/configs",
   jobs: "/api/v1/jobs",
   session: "/api/v1/session",
   setupStart: "/api/v1/setup/start",
+  setupPrompt: "/api/v1/setup/prompt",
   setupInput: "/api/v1/setup/input"
 });
 
@@ -20,6 +22,10 @@ const line = document.querySelector("#line");
 const suggestions = document.querySelector("#suggestions");
 const cancel = document.querySelector("#cancel");
 const form = document.querySelector("#command-form");
+const runState = document.querySelector("#run-state");
+const topbarState = runState && runState.parentElement;
+const clearTranscriptButton = document.querySelector("#clear-transcript");
+const themeToggle = document.querySelector("#theme-toggle");
 const legacyHistoryKey = "dmtx-console-history";
 const historyKey = "dmtx-console-history-v2";
 // Run records are durable operator history, not an unbounded log viewer. A
@@ -43,6 +49,617 @@ let setupActive = false;
 let setupMasked = false;
 const watchedJobs = new Set();
 let transcriptLines = [];
+let currentView = "dashboard";
+let latestSetupPrompt = null;
+let setupPromptLoaded = false;
+let setupPromptLoading = false;
+let activeCheck = "preflight";
+let progressSnapshot = { done: 0, total: 0, rows: 0, table: "—" };
+let configChoices = [];
+let configsLoading = false;
+let dashboardForm = { config: "", profile: "", state: "", dryRun: false, acknowledge: false };
+let historyForm = { state: "", run: "", outcome: "" };
+let historyRecords = [];
+let profileNames = [];
+let profileDeletePending = "";
+let sessionDefaults = [];
+let sessionLoading = false;
+let sessionLoaded = false;
+const jobContexts = new Map();
+let jobPoller = null;
+
+const consoleViews = Object.freeze({
+  dashboard: {
+    title: "Dashboard",
+    heading: "Run migrations with a complete audit trail.",
+    description: "Plan, execute, validate, and recover work from one operator-focused workspace.",
+    actions: [["Preflight", "Check migration readiness", "/preflight"], ["Run", "Start a migration", "/run"], ["Resume", "Continue a safe run", "/resume"], ["Validate", "Verify data parity", "/validate"]]
+  },
+  history: {
+    title: "History",
+    heading: "Understand where every migration stands.",
+    description: "Inspect the durable DMTX run record, detailed status, and recovery guidance.",
+    actions: [["History", "List recorded runs", "/history"], ["Status", "Inspect latest state", "/status --detailed"], ["Diagnose", "Explain interrupted work", "/diagnose"], ["Resume", "Continue a safe run", "/resume"]]
+  },
+  checks: {
+    title: "Checks",
+    heading: "Establish confidence before and after a run.",
+    description: "Run read-only readiness, validation, diagnosis, and effective-plan checks on demand.",
+    actions: [["Preflight", "Check connectivity", "/preflight"], ["Validate", "Compare table counts", "/validate"], ["Diagnose", "Find next recovery step", "/diagnose"], ["Analyze", "Inspect effective plan", "/analyze"]]
+  },
+  setup: {
+    title: "Guided setup",
+    heading: "Create a migration configuration safely.",
+    description: "DMTX’s guided setup writes only after explicit confirmation and masks sensitive answers.",
+    actions: [["Start setup", "Open the guided flow", "/setup"], ["Preflight", "Test a saved config", "/preflight"], ["Config", "Review resolved settings", "/config"], ["Init", "Create a config template", "/init"]]
+  },
+  profiles: {
+    title: "Profiles",
+    heading: "Work with encrypted connection profiles.",
+    description: "Profile actions remain in the DMTX command contract, so the same safeguards apply everywhere.",
+    actions: [["List profiles", "Show saved profiles", "/profile list"], ["Save profile", "Store a named config", "/profile save "], ["Status", "Inspect profile-backed work", "/status"], ["Help", "See profile syntax", "/help"]]
+  },
+  settings: {
+    title: "Settings",
+    heading: "Set the defaults for this console session.",
+    description: "Session configuration is explicit, scoped to this server, and visible through the existing DMTX API.",
+    actions: [["Session", "Show active defaults", "/session"], ["Set config", "Choose default config", "/session config "], ["Set profile", "Choose default profile", "/session profile "], ["Help", "Discover every command", "/help"]]
+  }
+});
+
+function setRunState(label, kind = "ready") {
+  if (!runState || !topbarState) return;
+  runState.textContent = label;
+  topbarState.classList.toggle("is-running", kind === "running");
+  topbarState.classList.toggle("is-error", kind === "error");
+}
+
+function initConsoleChrome() {
+  if (typeof document.querySelectorAll !== "function") return;
+  let savedTheme = "";
+  try { savedTheme = localStorage.getItem("dmtx-console-theme") || ""; } catch (_) {}
+  if (savedTheme === "light" || savedTheme === "dark") document.documentElement.dataset.theme = savedTheme;
+
+  const syncThemeToggle = () => {
+    if (!themeToggle) return;
+    const current = document.documentElement.dataset.theme ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const label = current === "dark" ? "Use light theme" : "Use dark theme";
+    themeToggle.textContent = label;
+    themeToggle.setAttribute("aria-label", label);
+    themeToggle.title = label;
+  };
+  syncThemeToggle();
+
+  if (themeToggle) themeToggle.addEventListener("click", () => {
+    const current = document.documentElement.dataset.theme ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const next = current === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("dmtx-console-theme", next); } catch (_) {}
+    syncThemeToggle();
+  });
+  if (clearTranscriptButton) clearTranscriptButton.addEventListener("click", clearTranscript);
+  document.querySelectorAll("[data-command-action]").forEach(button => {
+    button.addEventListener("click", () => {
+      if (setupActive) return;
+      const command = button.getAttribute("data-command") || "";
+      if (!command) return;
+      line.value = command + " ";
+      line.focus();
+      updateSuggestions().catch(() => {});
+      setStatus("Command ready to review and run.");
+    });
+  });
+  document.querySelectorAll("[data-view]").forEach(button => {
+    button.addEventListener("click", () => setConsoleView(button.getAttribute("data-view") || "dashboard"));
+  });
+  document.addEventListener("keydown", event => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      line.focus();
+      updateSuggestions().catch(() => {});
+    }
+  });
+  window.addEventListener("hashchange", () => {
+    const view = location.hash.slice(1);
+    if (Object.prototype.hasOwnProperty.call(consoleViews, view) && view !== currentView) setConsoleView(view, false);
+  });
+  const initialView = location.hash.slice(1);
+  setConsoleView(Object.prototype.hasOwnProperty.call(consoleViews, initialView) ? initialView : "dashboard", false);
+  startJobPolling();
+}
+
+function startJobPolling() {
+  if (jobPoller) clearInterval(jobPoller);
+  jobPoller = setInterval(() => { pollJobs().catch(() => {}); }, 5000);
+}
+
+async function pollJobs() {
+  const jobs = await request(apiRoutes.jobs);
+  const running = Array.isArray(jobs) ? jobs.filter(job => payloadRecord(job) && job.state === "running") : [];
+  if (!running.length && !activeJob) return;
+  for (const job of running) {
+    if (!watchedJobs.has(job.id)) watch(job.id, { command: job.command, typed: "" });
+  }
+  for (const id of [...watchedJobs]) {
+    const job = await request(jobURL(id));
+    if (job.state === "finished") finish(id, job.outcome || {});
+  }
+}
+
+function setConsoleView(view, writeHash = true) {
+  const page = consoleViews[view] || consoleViews.dashboard;
+  currentView = consoleViews[view] ? view : "dashboard";
+  const title = document.querySelector("#view-title");
+  const heading = document.querySelector("#workspace-title");
+  const description = document.querySelector("#workspace-description");
+  if (title) title.textContent = page.title;
+  if (heading) heading.textContent = page.heading;
+  if (description) description.textContent = page.description;
+  document.querySelectorAll("[data-view]").forEach(button => {
+    const active = button.getAttribute("data-view") === currentView;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  renderConsoleView();
+  if (writeHash && location.hash !== "#" + currentView) location.hash = currentView;
+}
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function panel(title, subtitle) {
+  const card = element("section", "card");
+  const heading = element("div", "card-heading");
+  heading.append(element("h3", "", title));
+  if (subtitle) heading.append(element("p", "sub", subtitle));
+  card.append(heading);
+  return card;
+}
+
+function button(label, kind, onClick) {
+  const control = element("button", kind || "btn", label);
+  control.type = "button";
+  control.addEventListener("click", onClick);
+  return control;
+}
+
+function inputField(labelText, placeholder, id) {
+  const field = element("label", "field");
+  field.append(element("span", "field-label", labelText));
+  const input = element("input", "mono");
+  input.type = "text";
+  input.id = id;
+  input.placeholder = placeholder;
+  field.append(input);
+  return { field, input };
+}
+
+function checkField(labelText, checked, onChange) {
+  const label = element("label", "checkline");
+  const input = element("input");
+  input.type = "checkbox";
+  input.checked = Boolean(checked);
+  input.addEventListener("change", () => onChange(input.checked));
+  label.append(input, element("span", "", labelText));
+  return label;
+}
+
+function selectField(labelText, id) {
+  const field = element("label", "field");
+  field.append(element("span", "field-label", labelText));
+  const select = element("select", "mono");
+  select.id = id;
+  field.append(select);
+  return { field, select };
+}
+
+function commandArgument(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return /[\s"]/.test(trimmed) ? " \"" + trimmed.replace(/\\/g, "\\\\").replace(/\"/g, "\\\"") + "\"" : " " + trimmed;
+}
+
+function dispatchViewCommand(command) {
+  if (setupActive && command !== "/setup") return;
+  line.value = command;
+  form.requestSubmit();
+}
+
+function resultPanel() {
+  const card = panel("Results", "Structured command output is retained in the live session transcript.");
+  const host = element("div", "view-results");
+  host.id = "view-result";
+  card.append(host);
+  return card;
+}
+
+function renderConsoleView() {
+  const view = document.querySelector("#view");
+  if (!view) return;
+  view.replaceChildren();
+  const page = consoleViews[currentView] || consoleViews.dashboard;
+  if (currentView !== "dashboard") {
+    const header = element("header", "view-header");
+    header.append(element("p", "eyebrow", "DMTX operator workspace"));
+    header.append(element("h2", "", page.title));
+    header.append(element("p", "", page.description));
+    view.append(header);
+  }
+  if (currentView === "dashboard") renderDashboardView(view);
+  else if (currentView === "history") renderHistoryView(view);
+  else if (currentView === "checks") renderChecksView(view);
+  else if (currentView === "setup") renderSetupView(view);
+  else if (currentView === "profiles") renderProfilesView(view);
+  else renderSettingsView(view);
+  refreshViewResults();
+}
+
+function renderDashboardView(view) {
+  const grid = element("div", "dashboard-grid");
+  const launch = panel("Launch", "Select a configuration or encrypted profile, then preview or start the migration.");
+  const fields = element("div", "form-grid");
+  const config = inputField("Config file", "migration.yaml", "dashboard-config");
+  config.input.value = dashboardForm.config;
+  config.input.addEventListener("input", () => { dashboardForm.config = config.input.value; if (config.input.value) { dashboardForm.profile = ""; profile.input.value = ""; } });
+  const profile = inputField("Saved profile", "optional profile name", "dashboard-profile");
+  profile.input.value = dashboardForm.profile;
+  profile.input.addEventListener("input", () => { dashboardForm.profile = profile.input.value; if (profile.input.value) { dashboardForm.config = ""; config.input.value = ""; } });
+  const state = inputField("State file", "optional.state.db", "dashboard-state");
+  state.input.value = dashboardForm.state;
+  state.input.addEventListener("input", () => { dashboardForm.state = state.input.value; });
+  fields.append(config.field, profile.field, state.field);
+  launch.append(fields);
+
+  const pickerRow = element("div", "picker-row");
+  const picker = selectField("Available configuration", "dashboard-config-picker");
+  const empty = element("option", "", configChoices.length ? "Choose a discovered config…" : "No configs loaded"); empty.value = ""; picker.select.append(empty);
+  configChoices.slice(0, 100).forEach(choice => {
+    const option = element("option", "", boundedPayloadText(choice.relative || choice.name || choice.path));
+    option.value = typeof choice.path === "string" ? choice.path : "";
+    picker.select.append(option);
+  });
+  picker.select.disabled = configsLoading || !configChoices.length;
+  picker.select.addEventListener("change", () => {
+    if (!picker.select.value) return;
+    dashboardForm.config = picker.select.value;
+    dashboardForm.profile = "";
+    renderConsoleView();
+  });
+  pickerRow.append(picker.field);
+  pickerRow.append(button(configsLoading ? "Loading…" : "Browse configs", "btn", () => loadConfigChoices()));
+  const profilePicker = selectField("Available profile", "dashboard-profile-picker");
+  const noProfile = element("option", "", profileNames.length ? "Choose a saved profile…" : "Load profiles to choose one"); noProfile.value = ""; profilePicker.select.append(noProfile);
+  profileNames.slice(0, 100).forEach(name => { const option = element("option", "", name); option.value = name; profilePicker.select.append(option); });
+  profilePicker.select.disabled = !profileNames.length;
+  profilePicker.select.addEventListener("change", () => {
+    if (!profilePicker.select.value) return;
+    dashboardForm.profile = profilePicker.select.value;
+    dashboardForm.config = "";
+    renderConsoleView();
+  });
+  pickerRow.append(profilePicker.field);
+  pickerRow.append(button("Load profiles", "btn", () => dispatchViewCommand("/profile list")));
+  launch.append(pickerRow);
+
+  const options = element("div", "launch-options");
+  options.append(checkField("Dry run — preview without writing", dashboardForm.dryRun, checked => { dashboardForm.dryRun = checked; }));
+  options.append(checkField("Acknowledge destructive target changes", dashboardForm.acknowledge, checked => { dashboardForm.acknowledge = checked; }));
+  launch.append(options);
+  const actions = element("div", "form-row");
+  const command = (base, forceDryRun, allowDryRun = true) => {
+    const origin = dashboardForm.profile.trim() ? " --profile" + commandArgument(dashboardForm.profile) : commandArgument(dashboardForm.config);
+    return base + origin + (dashboardForm.state.trim() ? " --state" + commandArgument(dashboardForm.state) : "") +
+      (allowDryRun && (forceDryRun || dashboardForm.dryRun) ? " --dry-run" : "") + (dashboardForm.acknowledge ? " --acknowledge-destructive" : "");
+  };
+  actions.append(button("Preview plan", "btn", () => dispatchViewCommand(command("/run", true))));
+  actions.append(button(dashboardForm.dryRun ? "Run dry run" : "Run migration", "btn primary", () => dispatchViewCommand(command("/run", false))));
+  actions.append(button("Resume", "btn", () => dispatchViewCommand(command("/resume", false, false))));
+  launch.append(actions);
+  grid.append(launch);
+
+  const telemetry = panel("Live migration", "Progress is streamed from the active DMTX job and safely reconnects after a reload.");
+  const phase = element("div", "phase-row");
+  const badge = element("span", "badge idle", activeJob ? "running" : "idle");
+  badge.id = "dash-phase";
+  phase.append(badge);
+  telemetry.append(phase);
+  const progress = element("div", "progress");
+  progress.setAttribute("role", "progressbar");
+  progress.setAttribute("aria-label", "Migration progress");
+  progress.setAttribute("aria-valuemin", "0");
+  progress.setAttribute("aria-valuemax", "100");
+  progress.setAttribute("aria-valuenow", "0");
+  const bar = element("i"); bar.id = "dash-progress"; progress.append(bar); telemetry.append(progress);
+  const stats = element("div", "telemetry");
+  [["Progress", "dash-percent"], ["Tables", "dash-tables"], ["Rows copied", "dash-rows"], ["Current table", "dash-table"]].forEach(([label, id]) => {
+    const stat = element("div", "stat"); stat.append(element("div", "k", label)); const value = element("div", "v num", "—"); value.id = id; stat.append(value); stats.append(stat);
+  });
+  telemetry.append(stats);
+  grid.append(telemetry);
+  view.append(grid, resultPanel());
+  updateDashboardTelemetry();
+}
+
+async function loadConfigChoices() {
+  if (configsLoading) return;
+  configsLoading = true;
+  if (currentView === "dashboard") renderConsoleView();
+  try {
+    const result = await request(apiRoutes.configs);
+    const entries = result && Array.isArray(result.configs) ? result.configs.slice(0, 100) : [];
+    configChoices = entries.filter(entry => payloadRecord(entry) && typeof entry.path === "string");
+    setStatus(configChoices.length ? "Configuration choices loaded." : "No configuration files were found.");
+  } catch (error) {
+    appendTranscript(error.message, "error");
+    setStatus("Configuration discovery failed.");
+  } finally {
+    configsLoading = false;
+    if (currentView === "dashboard") renderConsoleView();
+  }
+}
+
+function renderHistoryView(view) {
+  const card = panel("Run history", "Filter the durable history associated with a state database, then inspect an individual run.");
+  const fields = element("div", "form-grid");
+  const state = inputField("State file", "migration.state.db", "history-state");
+  state.input.value = historyForm.state;
+  state.input.addEventListener("input", () => { historyForm.state = state.input.value; });
+  const run = inputField("Run ID", "optional run identifier", "history-run");
+  run.input.value = historyForm.run;
+  run.input.addEventListener("input", () => { historyForm.run = run.input.value; });
+  const outcome = selectField("Outcome", "history-outcome");
+  [["", "All outcomes"], ["success", "Success"], ["partial", "Partial"], ["failed", "Failed"], ["cancelled", "Cancelled"], ["running", "Running"]].forEach(([value, label]) => { const option = element("option", "", label); option.value = value; if (value === historyForm.outcome) option.selected = true; outcome.select.append(option); });
+  outcome.select.addEventListener("change", () => {
+    historyForm.outcome = outcome.select.value;
+    renderConsoleView();
+    requestAnimationFrame(() => document.querySelector("#history-outcome")?.focus());
+  });
+  fields.append(state.field, run.field, outcome.field); card.append(fields);
+  const actions = element("div", "form-row");
+  actions.append(button("Load history", "btn primary", () => dispatchViewCommand("/history" + (historyForm.run.trim() ? " --run" + commandArgument(historyForm.run) : "") + (historyForm.state.trim() ? " --state" + commandArgument(historyForm.state) : ""))));
+  actions.append(button("Detailed status", "btn", () => dispatchViewCommand("/status --detailed" + (historyForm.state.trim() ? " --state" + commandArgument(historyForm.state) : ""))));
+  actions.append(button("Diagnose run", "btn", () => dispatchViewCommand("/diagnose" + (historyForm.run.trim() ? " --run" + commandArgument(historyForm.run) : "") + (historyForm.state.trim() ? " --state" + commandArgument(historyForm.state) : ""))));
+  card.append(actions); view.append(card, historyTable(), resultPanel());
+}
+
+function historyTable() {
+  const card = panel("Recorded runs", "The latest fetched history is presented as durable migration state, not browser input history.");
+  const filtered = historyRecords.filter(record => !historyForm.outcome || payloadText(record, "outcome") === historyForm.outcome);
+  if (!filtered.length) { card.append(element("p", "empty", historyRecords.length ? "No recorded runs match this outcome filter." : "Load history to view durable run records.")); return card; }
+  const wrap = element("div", "table-wrap");
+  const table = element("table", "data");
+  const head = element("thead"); const row = element("tr");
+  ["Run", "Outcome", "Started", "Recovery"].forEach(label => { const cell = element("th", "", label); cell.scope = "col"; row.append(cell); }); head.append(row); table.append(head);
+  const body = element("tbody");
+  filtered.slice(0, maxRenderedRuns).forEach(record => {
+    const tr = element("tr");
+    const id = payloadText(record, "id") || "—";
+    const idCell = element("td", "mono");
+    idCell.append(button(id, "table-link", () => { historyForm.run = id; renderConsoleView(); }));
+    tr.append(idCell);
+    const outcomeText = payloadText(record, "outcome") || "unknown";
+    const outcomeCell = element("td");
+    const outcomeKind = { success: "ok", failed: "err", partial: "warn", running: "run", cancelled: "warn" }[outcomeText] || "idle";
+    outcomeCell.append(element("span", "badge " + outcomeKind, outcomeText));
+    tr.append(outcomeCell);
+    tr.append(element("td", "mono", payloadText(record, "started_at") || "—"));
+    const recovery = payloadBoolean(record, "resumable");
+    tr.append(element("td", "", recovery || payloadText(record, "resumability_reason") || "—"));
+    body.append(tr);
+  });
+  table.append(body); wrap.append(table); card.append(wrap); return card;
+}
+
+function renderChecksView(view) {
+  const tabs = element("div", "tabs");
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", "Check type");
+  const checks = [["preflight", "Preflight"], ["config", "Config check"], ["validate", "Validate"], ["diagnose", "Diagnose"], ["analyze", "Analyze"]];
+  checks.forEach(([name, label]) => {
+    const tab = button(label, name === activeCheck ? "active" : "", () => { activeCheck = name; renderConsoleView(); });
+    tab.setAttribute("aria-pressed", String(name === activeCheck)); tabs.append(tab);
+  });
+  const labels = { preflight: "Verify connectivity and safety gates before a run.", config: "Review the resolved, redacted configuration that DMTX will use.", validate: "Compare aggregate source and target table counts.", diagnose: "Build deterministic facts and recovery guidance for a run.", analyze: "Show DMTX’s effective runtime plan and derived limits." };
+  const card = panel(checks.find(item => item[0] === activeCheck)[1], labels[activeCheck]);
+  const config = inputField("Config file", "migration.yaml or session default", "checks-config"); card.append(config.field);
+  const actions = element("div", "form-row");
+  actions.append(button("Run " + activeCheck, "btn primary", () => dispatchViewCommand("/" + activeCheck + commandArgument(config.input.value))));
+  card.append(actions); view.append(tabs, card, resultPanel());
+}
+
+function renderSetupView(view) {
+  const card = panel("Guided setup", "The flow is backed by DMTX’s authenticated setup API, including masked secret prompts.");
+  if (!setupPromptLoaded && !setupPromptLoading) {
+    setupPromptLoading = true;
+    request(apiRoutes.setupPrompt).then(prompt => {
+      setupPromptLoaded = true;
+      setupPromptLoading = false;
+      latestSetupPrompt = prompt && typeof prompt === "object" ? prompt : null;
+      setupActive = Boolean(latestSetupPrompt && !latestSetupPrompt.done);
+      setupMasked = Boolean(latestSetupPrompt && latestSetupPrompt.masked && !latestSetupPrompt.done);
+      line.type = setupMasked ? "password" : "text";
+      if (setupMasked) closePalette();
+      if (currentView === "setup") renderConsoleView();
+    }).catch(() => {
+      // A fresh server has no wizard yet (409). Treat that as the idle setup
+      // state; the Start setup control can begin one explicitly.
+      setupPromptLoaded = true;
+      setupPromptLoading = false;
+      setupActive = false;
+      setupMasked = false;
+      line.type = "text";
+      if (currentView === "setup") renderConsoleView();
+    });
+  }
+  if (setupPromptLoading) {
+    card.append(element("p", "empty", "Checking for an active setup flow…"));
+  } else if (!latestSetupPrompt || latestSetupPrompt.done) {
+    card.append(element("p", "empty", latestSetupPrompt && latestSetupPrompt.done ? "Setup is complete. Start another flow when you need a new configuration." : "No setup flow is active."));
+    card.append(button(latestSetupPrompt && latestSetupPrompt.done ? "Start again" : "Start setup", "btn primary", () => dispatchViewCommand("/setup")));
+  } else {
+    const promptText = element("p", "setup-prompt", latestSetupPrompt.text || "Enter the requested value.");
+    promptText.id = "setup-prompt-text";
+    card.append(promptText);
+    const formView = element("form", "form-row");
+    const answer = element("input", "mono"); answer.type = latestSetupPrompt.masked ? "password" : "text"; answer.placeholder = latestSetupPrompt.default || "Enter your response"; answer.autocomplete = "off"; answer.setAttribute("aria-labelledby", "setup-prompt-text");
+    formView.append(answer);
+    const continueButton = element("button", "btn primary", "Continue"); continueButton.type = "submit"; formView.append(continueButton);
+    formView.addEventListener("submit", event => { event.preventDefault(); line.value = answer.value; form.requestSubmit(); });
+    card.append(formView);
+    if (Array.isArray(latestSetupPrompt.choices) && latestSetupPrompt.choices.length) {
+      const choices = element("div", "choice-row");
+      latestSetupPrompt.choices.slice(0, 12).forEach(choice => choices.append(button(choice, "btn", () => { line.value = choice; form.requestSubmit(); })));
+      card.append(choices);
+    }
+  }
+  view.append(card, resultPanel());
+}
+
+function renderProfilesView(view) {
+  const card = panel("Encrypted profiles", "Profile actions use DMTX’s protected profile store; no profile secret is exposed in this console.");
+  const fields = element("div", "form-grid");
+  const name = inputField("Profile name", "production", "profile-name");
+  const config = inputField("Config file", "migration.yaml", "profile-config");
+  fields.append(name.field, config.field); card.append(fields);
+  const actions = element("div", "form-row");
+  actions.append(button("List profiles", "btn", () => dispatchViewCommand("/profile list")));
+  actions.append(button("Save profile", "btn primary", () => dispatchViewCommand("/profile save" + commandArgument(name.input.value) + commandArgument(config.input.value))));
+  card.append(actions); view.append(card, profilesTable(), resultPanel());
+}
+
+function profilesTable() {
+  const card = panel("Saved profiles", "Names are loaded through DMTX’s profile command; profile contents never reach the browser.");
+  if (!profileNames.length) { card.append(element("p", "empty", "Select List profiles to load the available encrypted profile names.")); return card; }
+  const wrap = element("div", "table-wrap"); const table = element("table", "data");
+  const head = element("thead"); const top = element("tr"); ["Profile", "Action"].forEach(label => { const cell = element("th", "", label); cell.scope = "col"; top.append(cell); }); head.append(top); table.append(head);
+  const body = element("tbody");
+  profileNames.slice(0, 100).forEach(name => {
+    const row = element("tr"); row.append(element("td", "mono", name));
+    const action = element("td", "table-action");
+    if (profileDeletePending === name) {
+      const confirm = button("Confirm delete", "btn danger", () => { profileDeletePending = ""; dispatchViewCommand("/profile delete" + commandArgument(name)); });
+      confirm.setAttribute("aria-label", "Confirm delete profile " + name);
+      action.append(confirm);
+      const keep = button("Keep profile", "btn", () => {
+        profileDeletePending = "";
+        renderConsoleView();
+        requestAnimationFrame(() => document.querySelector('[aria-label="Delete profile ' + CSS.escape(name) + '"]')?.focus());
+      });
+      keep.setAttribute("aria-label", "Keep profile " + name);
+      action.append(keep);
+    } else {
+      const remove = button("Delete", "btn danger", () => {
+        profileDeletePending = name;
+        renderConsoleView();
+        requestAnimationFrame(() => document.querySelector('[aria-label="Confirm delete profile ' + CSS.escape(name) + '"]')?.focus());
+      });
+      remove.setAttribute("aria-label", "Delete profile " + name);
+      action.append(remove);
+    }
+    row.append(action); body.append(row);
+  });
+  table.append(body); wrap.append(table); card.append(wrap); return card;
+}
+
+function renderSettingsView(view) {
+  const card = panel("Session defaults", "These are the live keys supplied by the DMTX session API. Values remain write-only in this console.");
+  if (!sessionLoaded && !sessionLoading) loadSessionDefaults();
+  if (!sessionDefaults.length) {
+    card.append(element("p", "empty", sessionLoading ? "Loading session keys…" : "No session keys loaded yet."));
+    card.append(button("Refresh session keys", "btn", () => loadSessionDefaults()));
+  } else {
+    const list = element("div", "settings-list");
+    sessionDefaults.forEach(entry => {
+      const item = payloadRecord(entry); if (!item) return;
+      const key = payloadText(item, "key"); if (!key) return;
+      const row = element("div", "setting-row");
+      const description = element("div", "setting-copy");
+      description.append(element("strong", "mono", key), element("p", "", payloadText(item, "description") || "Session default"));
+      const input = element("input", "mono"); input.type = "text"; input.placeholder = item.set === true ? "A value is set; enter a replacement" : "Enter a value"; input.setAttribute("aria-label", "Set " + key);
+      const controls = element("div", "setting-controls");
+      const save = button("Save", "btn", () => setSessionDefault(key, input.value));
+      save.setAttribute("aria-label", "Save " + key + " default");
+      controls.append(input, save);
+      if (item.set === true) {
+        const clear = button("Clear", "btn danger", () => clearSessionDefault(key));
+        clear.setAttribute("aria-label", "Clear " + key + " default");
+        controls.append(clear);
+      }
+      row.append(description, controls); list.append(row);
+    });
+    card.append(list);
+    card.append(button("Refresh session keys", "btn", () => loadSessionDefaults()));
+  }
+  const maintenance = panel("Console maintenance", "Only browser-local maintenance is available because DMTX has no server-side cache control API.");
+  maintenance.append(button("Download session transcript", "btn", downloadTranscript));
+  maintenance.append(element("p", "empty", "No profile, cache, or secret maintenance action is exposed here unless DMTX supports it."));
+  view.append(card, maintenance, resultPanel());
+}
+
+async function loadSessionDefaults() {
+  if (sessionLoading) return;
+  sessionLoading = true;
+  if (currentView === "settings") renderConsoleView();
+  try {
+    const response = await request(apiRoutes.session);
+    sessionDefaults = response && Array.isArray(response.defaults) ? response.defaults.slice(0, 12) : [];
+  } catch (error) {
+    appendTranscript(error.message, "error");
+  } finally {
+    sessionLoading = false;
+    sessionLoaded = true;
+    if (currentView === "settings") renderConsoleView();
+  }
+}
+
+async function setSessionDefault(key, value) {
+  if (!value.trim()) { setStatus("Enter a value or use Clear."); return; }
+  try {
+    await request(apiRoutes.session, { key, value: value.trim() });
+    setStatus("Session default updated.");
+    await loadSessionDefaults();
+  } catch (error) { appendTranscript(error.message, "error"); }
+}
+
+async function clearSessionDefault(key) {
+  try {
+    await request(apiRoutes.session + "/" + encodeURIComponent(key), undefined, "DELETE");
+    setStatus("Session default cleared.");
+    await loadSessionDefaults();
+  } catch (error) { appendTranscript(error.message, "error"); }
+}
+
+function refreshViewResults() {
+  // The tiny renderer test harness intentionally has no mounted application
+  // view. Keeping this progressive enhancement behind a real DOM capability
+  // preserves the same bounded transcript renderer in browser and harness.
+  if (typeof document.getElementById !== "function") return;
+  const host = document.querySelector("#view-result");
+  if (!host) return;
+  host.replaceChildren();
+  const recent = transcriptLines.slice(-6);
+  if (!recent.length) { host.append(element("p", "empty", "Run an action to see its safe, structured result here.")); return; }
+  recent.forEach(text => host.append(element("pre", "view-result-line", text)));
+}
+
+function updateDashboardTelemetry() {
+  const total = progressSnapshot.total;
+  const done = progressSnapshot.done;
+  const percent = total ? Math.round(done * 100 / total) : 0;
+  const values = [["#dash-percent", total ? percent + "%" : "—"], ["#dash-tables", total ? done + " / " + total : "—"], ["#dash-rows", progressSnapshot.rows ? String(progressSnapshot.rows) : "—"], ["#dash-table", progressSnapshot.table || "—"]];
+  values.forEach(([selector, value]) => { const target = document.querySelector(selector); if (target) target.textContent = value; });
+  const bar = document.querySelector("#dash-progress"); if (bar) bar.style.width = percent + "%";
+  const progress = bar && bar.parentElement;
+  if (progress) progress.setAttribute("aria-valuenow", String(percent));
+  const phase = document.querySelector("#dash-phase"); if (phase) { phase.textContent = activeJob ? "running" : "idle"; phase.className = "badge " + (activeJob ? "run" : "idle"); }
+}
 
 if ("serviceWorker" in navigator) {
   let workerURL = "/sw.js";
@@ -62,6 +679,7 @@ function jobEventsURL(id) { return jobURL(id) + "/events"; }
 function jobCancelURL(id) { return jobURL(id) + "/cancel"; }
 
 function appendTranscript(value, kind = "") {
+  const wasNearEnd = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 64;
   const raw = String(value);
   const text = raw.length > maxRenderedFieldLength * 8
     ? raw.slice(0, maxRenderedFieldLength * 8) + "\n[output truncated]"
@@ -73,6 +691,8 @@ function appendTranscript(value, kind = "") {
   transcriptLines.push(text);
   while (transcript.children.length > maxTranscriptEntries) transcript.firstElementChild.remove();
   while (transcriptLines.length > maxTranscriptEntries) transcriptLines.shift();
+  if (wasNearEnd) transcript.scrollTop = transcript.scrollHeight;
+  refreshViewResults();
 }
 
 function setStatus(value) { status.textContent = String(value); }
@@ -80,6 +700,7 @@ function setStatus(value) { status.textContent = String(value); }
 function clearTranscript() {
   transcript.replaceChildren();
   transcriptLines = [];
+  refreshViewResults();
   setStatus("Transcript cleared.");
 }
 
@@ -147,12 +768,16 @@ function renderProgress(data) {
       let text = "Planned " + total + " table(s).";
       if (shown.length) text += "\nTables: " + shown.join(", ");
       if (total > shown.length) text += "\nAdditional table names omitted.";
+      progressSnapshot = { done: 0, total, rows: 0, table: "Planning complete" };
+      updateDashboardTelemetry();
       appendTranscript(text);
       return;
     }
     case "table_started": {
       const table = boundedPayloadText(record.table);
       if (!table || total < 1) break;
+      progressSnapshot = { done, total, rows: progressSnapshot.rows, table };
+      updateDashboardTelemetry();
       appendTranscript("Starting table " + table + " (" + done + " of " + total + " completed).");
       return;
     }
@@ -161,6 +786,8 @@ function renderProgress(data) {
       const rows = record.rows === undefined ? 0 : progressCount(record, "rows");
       if (!table || total < 1 || done < 1 || rows === null) break;
       // Rows is the aggregate table count from app.Progress, never row data.
+      progressSnapshot = { done, total, rows, table };
+      updateDashboardTelemetry();
       appendTranscript("Finished table " + table + " (" + done + " of " + total + "; " + rows + " rows).");
       return;
     }
@@ -479,6 +1106,9 @@ function renderedAIAdvisory(data) {
 function renderPayload(payload) {
   if (!payload || typeof payload !== "object") return false;
   if (payload.kind === "run") {
+    const record = payloadRecord(payload.data);
+    if (record) historyRecords = [record];
+    if (currentView === "history") renderConsoleView();
     const text = renderedRun(payload.data);
     if (!text) return false;
     appendTranscript(text);
@@ -486,6 +1116,8 @@ function renderPayload(payload) {
   }
   if (payload.kind === "runs") {
     if (!Array.isArray(payload.data)) return false;
+    historyRecords = latestRunRecords(payload.data);
+    if (currentView === "history") renderConsoleView();
     if (!payload.data.length) {
       appendTranscript("No runs recorded.");
       return true;
@@ -828,6 +1460,7 @@ function recallHistory() {
 }
 
 function renderSetupPrompt(prompt) {
+  latestSetupPrompt = prompt && typeof prompt === "object" ? prompt : null;
   setupMasked = Boolean(prompt.masked) && !prompt.done;
   line.type = setupMasked ? "password" : "text";
   if (prompt.error) appendTranscript("Setup: " + prompt.error, "error");
@@ -837,6 +1470,7 @@ function renderSetupPrompt(prompt) {
     setupActive = false;
     setupMasked = false;
     setStatus("Setup complete.");
+    if (currentView === "setup") renderConsoleView();
     return;
   }
   const details = [];
@@ -844,12 +1478,13 @@ function renderSetupPrompt(prompt) {
   if (prompt.choices && prompt.choices.length) details.push("choices: " + prompt.choices.join(", "));
   if (details.length) appendTranscript("[" + details.join("; ") + "]");
   setStatus("Setup is waiting for input.");
+  if (currentView === "setup") renderConsoleView();
 }
 
 function renderOutcome(outcome, wasCancelled = false) {
   if (wasCancelled || outcome.exit_code === 130) appendTranscript("Cancelled.");
   if (outcome.exit_code === 130) return;
-  const messages = (outcome.messages || []).map(message => message.text).filter(Boolean);
+  const messages = (Array.isArray(outcome.messages) ? outcome.messages : []).map(message => payloadText(message, "text")).filter(Boolean);
   const renderedPayload = renderPayload(outcome.payload);
   if (renderedPayload) {
     if (messages.length && outcome.exit_code !== 0) {
@@ -867,24 +1502,54 @@ function renderOutcome(outcome, wasCancelled = false) {
   appendTranscript(outcome.exit_code === 0 ? "Completed." : "Finished with exit code " + (outcome.exit_code ?? "unknown") + ".");
 }
 
+function setTerminalRunState(outcome, wasCancelled = false) {
+  if (wasCancelled || outcome.exit_code === 130) setRunState("Cancelled");
+  else if (outcome.exit_code === 0) setRunState("Complete");
+  else setRunState("Needs attention", "error");
+}
+
 function finish(id, outcome) {
+  if (!watchedJobs.has(id)) return;
   watchedJobs.delete(id);
+  const result = outcome || {};
+  const context = jobContexts.get(id);
+  jobContexts.delete(id);
   const wasCancelled = activeJob === id && cancelling;
   if (activeJob === id) {
     activeJob = null;
     cancelling = false;
     cancel.disabled = true;
   }
-  renderOutcome(outcome || {}, wasCancelled);
+  renderOutcome(result, wasCancelled);
+  if (context && context.typed && result.exit_code !== 0) {
+    const words = consoleWords(context.typed).words || [];
+    if (words[0] && words[0].replace(/^\//, "").toLowerCase() === "history") {
+      historyRecords = [];
+      if (currentView === "history") renderConsoleView();
+    }
+  }
+  if (context && context.typed && result.exit_code === 0) {
+    const words = consoleWords(context.typed).words || [];
+    if (words[0] && words[0].replace(/^\//, "").toLowerCase() === "profile") {
+      if (words[1] === "list") profileNames = (Array.isArray(result.messages) ? result.messages : []).map(message => payloadText(message, "text")).filter(Boolean).slice(0, 100);
+      if (words[1] === "delete" && words[2]) profileNames = profileNames.filter(name => name !== words[2]);
+      if (words[1] === "save" && words[2] && !profileNames.includes(words[2])) profileNames = [...profileNames, words[2]].sort();
+      if (currentView === "profiles" || currentView === "dashboard") renderConsoleView();
+    }
+  }
+  setTerminalRunState(result, wasCancelled);
+  updateDashboardTelemetry();
   setStatus(wasCancelled ? "Command cancelled." : "Command finished.");
 }
 
-function watch(id) {
+function watch(id, context) {
   if (watchedJobs.has(id)) return;
   watchedJobs.add(id);
+  if (context) jobContexts.set(id, context);
   activeJob = id;
   cancelling = false;
   cancel.disabled = false;
+  setRunState("Running", "running");
   const events = new EventSource(jobEventsURL(id));
   events.addEventListener("progress", event => renderProgress(event.data));
   events.addEventListener("finished", event => {
@@ -912,13 +1577,15 @@ async function recoverJobs() {
   for (const job of jobs) {
     if (job.state === "running") {
       appendTranscript("Reattached to " + job.command + ".");
-      watch(job.id);
+      watch(job.id, { command: job.command, typed: "" });
       continue;
     }
     const current = await request(jobURL(job.id));
     if (current.state === "finished") {
       appendTranscript("Recent " + job.command + ".");
-      renderOutcome(current.outcome || {});
+      const outcome = current.outcome || {};
+      renderOutcome(outcome);
+      setTerminalRunState(outcome);
     }
   }
 }
@@ -1007,14 +1674,14 @@ async function localSession(words) {
 
 async function localAbout() {
   const parsed = await request(apiRoutes.parse, { line: "version" });
-  const version = ((parsed.outcome || {}).messages || []).map(message => payloadText(message, "text")).find(Boolean) || "unknown";
+  const version = (Array.isArray((parsed.outcome || {}).messages) ? parsed.outcome.messages : []).map(message => payloadText(message, "text")).find(Boolean) || "unknown";
   appendTranscript("dmtx " + version + "\n\nDeterministic database migration tool.\n\nFeatures:\n- Parallel transfer with runtime safety tuning\n- Resume capability\n- Validation and durable history\n- Encrypted profiles\n- Guided setup");
   setStatus("About DMTX shown.");
 }
 
 async function localHelp() {
   const parsed = await request(apiRoutes.parse, { line: "help" });
-  const messages = ((parsed.outcome || {}).messages || [])
+  const messages = (Array.isArray((parsed.outcome || {}).messages) ? parsed.outcome.messages : [])
     .map(message => payloadText(message, "text"))
     .filter(Boolean);
   if (messages.length) appendTranscript(messages.join("\n"));
@@ -1201,6 +1868,7 @@ form.addEventListener("submit", async event => {
   try {
     if (setupActive) {
       const prompt = await request(apiRoutes.setupInput, { input: typed });
+      setupPromptLoaded = true;
       renderSetupPrompt(prompt);
       line.value = "";
       return;
@@ -1213,6 +1881,7 @@ form.addEventListener("submit", async event => {
     if (setup && setup.error) throw new Error(setup.error);
     if (setup) {
       const prompt = await request(apiRoutes.setupStart, setup);
+      setupPromptLoaded = true;
       setupActive = true;
       renderSetupPrompt(prompt);
       line.value = "";
@@ -1228,11 +1897,12 @@ form.addEventListener("submit", async event => {
 	    appendTranscript("> /" + started.command, "command");
     appendTranscript("Started " + started.command + ".");
     setStatus("Started " + started.command + ".");
-    watch(started.id);
+    watch(started.id, { command: started.command, typed });
   } catch (error) {
     appendTranscript(error.message, "error");
     setStatus("Command request failed.");
   }
 });
 
+initConsoleChrome();
 Promise.all([loadCommands(), recoverJobs()]).then(() => updateSuggestions()).catch(error => appendTranscript(error.message, "error"));
