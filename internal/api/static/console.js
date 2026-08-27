@@ -487,14 +487,16 @@ function renderSetupView(view) {
       line.type = setupMasked ? "password" : "text";
       if (setupMasked) closePalette();
       if (currentView === "setup") renderConsoleView();
-    }).catch(() => {
-      // A fresh server has no wizard yet (409). Treat that as the idle setup
-      // state; the Start setup control can begin one explicitly.
+    }).catch(error => {
       setupPromptLoaded = true;
       setupPromptLoading = false;
       setupActive = false;
       setupMasked = false;
       line.type = "text";
+      if (!(error.status === 409 && error.message === "setup has not started")) {
+        appendTranscript(error.message, "error");
+        setStatus("Setup status check failed.");
+      }
       if (currentView === "setup") renderConsoleView();
     });
   }
@@ -1172,7 +1174,11 @@ async function request(path, body, method) {
       throw new Error("server returned an invalid response");
     }
   }
-  if (!response.ok) throw new Error(result.error || "request failed");
+  if (!response.ok) {
+    const error = new Error(result.error || "request failed");
+    error.status = response.status;
+    throw error;
+  }
   return result;
 }
 

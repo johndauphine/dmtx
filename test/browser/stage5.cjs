@@ -8,7 +8,7 @@ const options = JSON.parse(process.argv[4]);
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 
 (async () => {
-  const headed = process.argv[5] === "1";
+  const headed = ["1", "true", "yes", "on"].includes(String(process.argv[5] || "").toLowerCase());
   console.log("stage5 browser mode: " + (headed ? "headed" : "headless"));
   const browser = await chromium.launch({
     executablePath: edge,
